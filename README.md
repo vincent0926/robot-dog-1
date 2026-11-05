@@ -167,6 +167,14 @@ walk 任務可以用鍵盤控制，先用滑鼠點一下視窗：
 | `,` / `.` | 向左 / 向右平移 |
 | `/` | 停下來 |
 
+### 看訓練過程（每個 checkpoint 一段影片）
+
+```bash
+python -m robodog.progress_video runs/walk/latest
+```
+
+會在該次訓練的 `videos/` 資料夾產生每個 checkpoint 的影片，畫面上標出步數和 reward。另外還有一支 `progress.mp4`，把全部接起來，從頭看到尾就是整個學習過程。訓練還在跑的時候也可以用，加上 `--only-new` 就只會錄新的 checkpoint。沒有螢幕的機器要先執行 `export MUJOCO_GL=osmesa`。
+
 ### 錄成影片
 
 ```bash
@@ -184,6 +192,7 @@ robodog/
   train.py          訓練入口（PPO、TensorBoard、checkpoint、NaN 偵測、記憶體不足提示）
   evaluate.py       依 PRD 的驗收標準評估
   play.py           3D 視窗 / 錄影
+  progress_video.py 每個 checkpoint 錄一段影片，看訓練過程
   config.py         YAML 讀取與 --set 覆寫
   policy_io.py      找 checkpoint、載入策略
   envs/__init__.py  任務註冊表（walk / getup 直接用 Playground 的 Go1 環境）
