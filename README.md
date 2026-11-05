@@ -233,7 +233,13 @@ JAX 版本太新。請用 `requirements.txt` 鎖定的版本（JAX 0.9.2）。
 
 **沒有 NVIDIA 顯示卡也想跑**
 
-加上 `--set env.impl=jax`，並把 `ppo.num_envs` 調小。CPU 非常慢，只適合除錯。
+用縮小版設定：
+
+```bash
+python -m robodog.train configs/walk_cpu.yaml
+```
+
+這份設定是 256 個環境、2,000 萬步。4 核 CPU 約每秒 3,700 步，跑完大概 1.5～2 小時，品質不如 GPU 版。
 
 ---
 
