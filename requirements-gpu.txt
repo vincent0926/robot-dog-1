@@ -1,0 +1,3 @@
+# NVIDIA 顯示卡用（RTX 5060 等 50 系列需要 CUDA 12.8 以上，這裡會裝 12.9）
+-r requirements.txt
+jax[cuda12]==0.9.2

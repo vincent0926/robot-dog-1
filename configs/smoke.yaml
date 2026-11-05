@@ -1,0 +1,15 @@
+# 冒煙測試：疊在任何任務設定上面（--smoke），用 CPU 跑幾秒鐘確認整條流程沒壞。
+# 這個規模學不會任何東西，只是檢查程式。
+env:
+  impl: jax
+  episode_length: 50
+ppo:
+  num_timesteps: 4000
+  num_evals: 2
+  num_envs: 8
+  batch_size: 8
+  num_minibatches: 2
+  num_updates_per_batch: 1
+  unroll_length: 10
+  num_resets_per_eval: 0
+  num_eval_envs: 8

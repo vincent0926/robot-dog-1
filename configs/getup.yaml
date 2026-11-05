@@ -1,0 +1,43 @@
+# 任務二：跌倒後站起來
+# 環境預設值來自 MuJoCo Playground 的 Go1Getup。
+task: getup
+seed: 0
+domain_randomization: true
+
+env:
+  impl: warp
+  episode_length: 300               # 300 步 × 0.02 秒 = 6 秒
+  drop_from_height_prob: 0.6        # 60% 從空中隨機姿態掉下來，其餘從趴姿開始
+  reward_config:
+    scales:
+      orientation: 1.0      # 機身朝上
+      torso_height: 1.0     # 機身高度接近站立高度
+      posture: 1.0          # 關節接近站姿
+      stand_still: 1.0
+      action_rate: -0.001
+      dof_pos_limits: -0.1
+      torques: -0.00001
+      dof_acc: -0.00000025
+      dof_vel: -0.1
+
+ppo:
+  num_timesteps: 50000000
+  num_evals: 5
+  num_envs: 2048            # 站起任務要算全身碰撞，比走路吃記憶體，先用 2048
+  batch_size: 256
+  num_minibatches: 32
+  num_updates_per_batch: 4
+  unroll_length: 20
+  learning_rate: 0.0003
+  entropy_cost: 0.01
+  discounting: 0.97
+  reward_scaling: 1.0
+  max_grad_norm: 1.0
+  normalize_observations: true
+  num_resets_per_eval: 10
+  action_repeat: 1
+  network:
+    policy_hidden_layer_sizes: [512, 256, 128]
+    value_hidden_layer_sizes: [512, 256, 128]
+    policy_obs_key: state
+    value_obs_key: privileged_state

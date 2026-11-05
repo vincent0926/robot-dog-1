@@ -1,0 +1,55 @@
+# 任務一：平地行走，跟隨速度指令 (vx, vy, wz)
+# 環境預設值來自 MuJoCo Playground 的 Go1JoystickFlatTerrain，
+# 這裡只列出常改的欄位；沒寫的欄位維持預設。
+task: walk
+seed: 0
+domain_randomization: true   # 隨機摩擦力、質量、重心（讓策略更穩）
+
+env:
+  impl: warp                  # warp = NVIDIA GPU 最快；沒有 GPU 時改成 jax
+  episode_length: 1000        # 1000 步 × 0.02 秒 = 20 秒
+  command_config:
+    a: [1.5, 0.8, 1.2]        # 指令最大值：前後 m/s、左右 m/s、轉向 rad/s
+  pert_config:
+    enable: false             # true = 訓練時隨機推機器狗
+  reward_config:
+    tracking_sigma: 0.25
+    scales:
+      tracking_lin_vel: 1.0   # 跟上線速度指令
+      tracking_ang_vel: 0.5   # 跟上轉向指令
+      lin_vel_z: -0.5         # 不要上下彈跳
+      ang_vel_xy: -0.05       # 不要左右搖晃
+      orientation: -5.0       # 機身保持水平
+      dof_pos_limits: -1.0    # 關節不要頂到極限
+      pose: 0.5               # 接近預設站姿
+      termination: -1.0       # 跌倒
+      stand_still: -1.0       # 指令為 0 時要站好不動
+      torques: -0.0002
+      action_rate: -0.01      # 動作不要抖
+      energy: -0.001
+      feet_clearance: -2.0
+      feet_height: -0.2
+      feet_slip: -0.1         # 腳著地時不要滑
+      feet_air_time: 0.1      # 鼓勵抬腳走路
+
+ppo:
+  num_timesteps: 100000000    # 1 億步
+  num_evals: 10               # 評估（並存 checkpoint）幾次
+  num_envs: 4096              # 同時跑幾個環境；顯卡記憶體不夠就減半
+  batch_size: 256
+  num_minibatches: 32
+  num_updates_per_batch: 4
+  unroll_length: 20
+  learning_rate: 0.0003
+  entropy_cost: 0.01
+  discounting: 0.97
+  reward_scaling: 1.0
+  max_grad_norm: 1.0
+  normalize_observations: true
+  num_resets_per_eval: 10
+  action_repeat: 1
+  network:
+    policy_hidden_layer_sizes: [512, 256, 128]
+    value_hidden_layer_sizes: [512, 256, 128]
+    policy_obs_key: state             # 策略只看得到真實機器人也量得到的資訊
+    value_obs_key: privileged_state   # 評價網路可以偷看模擬器才有的資訊（訓練用）

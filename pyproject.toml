@@ -1,0 +1,19 @@
+[project]
+name = "robodog"
+version = "0.1.0"
+description = "機器狗強化學習訓練模擬器（MuJoCo Playground + Brax PPO）"
+requires-python = ">=3.10"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["robodog*"]
+
+[tool.setuptools.package-data]
+robodog = ["assets/*.xml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
