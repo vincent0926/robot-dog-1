@@ -85,6 +85,9 @@ def main(argv=None) -> None:
   out_dir = run_dir / "videos"
   out_dir.mkdir(exist_ok=True)
   rewards = _eval_rewards(run_dir)
+  previous = {}
+  if (out_dir / "progress.json").exists():
+    previous = {c["step"]: c for c in json.loads((out_dir / "progress.json").read_text())["clips"]}
 
   env = envs.make_env(task, cfg.get("env") or {})
   network = brax_ckpt.get_network(_load_network_config(ckpts[-1]), ppo_networks.make_ppo_networks)
@@ -114,28 +117,32 @@ def main(argv=None) -> None:
     text = f"step {_fmt_steps(n)}" + (f"   eval reward {r:.1f}" if r is not None else "")
     if args.only_new and path.exists():
       clips.append(imageio.mimread(path, memtest=False))
-      summary.append({"step": n, "reward": r, "video": path.name})
+      summary.append(previous.get(n, {"step": n, "reward": r, "video": path.name}))
       continue
 
     params = ppo_checkpoint.load(ckpt)
     rng = jax.random.PRNGKey(args.seed)
     rng, k = jax.random.split(rng)
     state = reset(k)
-    traj, falls = [state], 0
+    traj, falls, fwd = [state], 0, []
     for i in range(n_steps):
       rng, k = jax.random.split(rng)
       state = step(state, scripted_command(i * env.dt), params, k)
       traj.append(state)
+      if task == "walk" and 1.0 <= i * env.dt < 3.0:  # 劇本前 3 秒是「前進 1 m/s」
+        fwd.append(float(env.get_local_linvel(state.data)[0]))
       if float(state.done) > 0:
         falls += 1
         rng, k = jax.random.split(rng)
         state = reset(k)
     frames = env.render(traj[::every], height=args.height, width=args.width, camera=CAMERA[task])
-    frames = _label(frames, text + (f"   falls {falls}" if task == "walk" else ""))
+    fwd_speed = float(np.mean(fwd)) if fwd else None
+    extra = f"   fwd {fwd_speed:.2f} m/s (cmd 1.0)   falls {falls}" if task == "walk" else ""
+    frames = _label(frames, text + extra)
     imageio.mimsave(path, frames, fps=fps, macro_block_size=8)
     clips.append(frames)
-    summary.append({"step": n, "reward": r, "falls": falls, "video": path.name})
-    print(f"[video] {path.name}  {text}  falls={falls}", flush=True)
+    summary.append({"step": n, "reward": r, "falls": falls, "fwd_speed": fwd_speed, "video": path.name})
+    print(f"[video] {path.name}  {text}{extra}", flush=True)
 
   all_frames = [f for clip in clips for f in clip]
   imageio.mimsave(out_dir / "progress.mp4", all_frames, fps=fps, macro_block_size=8)

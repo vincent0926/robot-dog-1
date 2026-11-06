@@ -1,14 +1,28 @@
 # 沒有 GPU 時的 walk 訓練（例如雲端 4 核 CPU）。
-# 用法：python -m robodog.train configs/walk.yaml --smoke 是「測程式」，
-#       這個檔案是「真的想在 CPU 上學出東西」的縮小版：
 #   python -m robodog.train configs/walk_cpu.yaml
-# 4 核 CPU 約 3,700 steps/s，2,000 萬步約 1.5～2 小時。品質不如 GPU 版的 1 億步。
+# 4 核 CPU 約 4,700 steps/s，2,000 萬步約 75 分鐘。
+#
+# 為什麼 reward 和 walk.yaml 不一樣？
+#   第一次用預設 reward 在 CPU 上練 2,000 萬步，策略學會「站穩不動」就停了：
+#   站著也能拿到部分速度追蹤分和站姿分，一抬腳反而被扣分。
+#   樣本少的時候很容易卡在這個區域最佳解，所以這裡讓「走起來」更划算：
+#   追蹤獎勵加倍、抬腳獎勵加大，站姿獎勵和抬腳懲罰調小，指令範圍先縮小。
 task: walk
 seed: 0
 domain_randomization: false   # CPU 版先關掉，學得比較快
 
 env:
   impl: jax                   # CPU 只能用 jax 實作
+  command_config:
+    a: [1.0, 0.5, 1.0]        # 先練比較慢的速度（預設 1.5, 0.8, 1.2）
+  reward_config:
+    scales:
+      tracking_lin_vel: 2.0   # 預設 1.0
+      tracking_ang_vel: 1.0   # 預設 0.5
+      pose: 0.1               # 預設 0.5：站姿獎勵太高會讓牠捨不得動
+      feet_air_time: 0.5      # 預設 0.1：鼓勵抬腳
+      feet_clearance: -0.5    # 預設 -2.0
+      energy: -0.0005         # 預設 -0.001
 
 ppo:
   num_timesteps: 20000000
