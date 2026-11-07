@@ -342,15 +342,15 @@ def make_handler(root: Path, tb: TBCache, worker: Worker | None):
           body = (STATIC_DIR / "index.html").read_bytes()
           return self._send(200, body, "text/html; charset=utf-8")
         if path == "/api/runs":
-          runs = []
+          runs, errors = [], []
           for r in list_runs(root):
             try:
               runs.append(run_summary(r, tb))
-            except Exception:  # noqa: BLE001  一個壞掉的 run 不要拖垮整個列表
-              continue
+            except Exception as e:  # noqa: BLE001  一個壞掉的 run 不要拖垮整個列表
+              errors.append(f"{r.parent.name}/{r.name}：{type(e).__name__}: {e}")
           job = worker.current if worker else None
           return self._json({
-              "runs": runs, "root": str(root), "now": time.time(),
+              "runs": runs, "errors": errors, "root": str(root), "now": time.time(),
               "job": {"run": Path(job["run"]).name, "kind": job["kind"]} if job else None,
           })
         if path == "/api/run":

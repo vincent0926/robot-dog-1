@@ -199,7 +199,7 @@ async function refresh() {
         || runs.find(r => r.state === "running") || runs[0];
       selected = pick ? { task: pick.task, name: pick.name } : null;
     }
-    renderList(data.job);
+    renderList(data.job, data.errors || []);
     if (selected) {
       const fresh = await getJSON(`/api/run?task=${encodeURIComponent(selected.task)}&name=${encodeURIComponent(selected.name)}`);
       const sig = JSON.stringify(fresh);
@@ -219,7 +219,7 @@ function updateTick() {
   t.textContent = lastOk ? "更新於 " + new Date(lastOk).toLocaleTimeString("zh-TW", { hour12: false }) : "";
 }
 
-function renderList(job) {
+function renderList(job, errors) {
   const box = document.getElementById("runlist");
   const byTask = {};
   runs.forEach(r => (byTask[r.task] ||= []).push(r));
@@ -239,6 +239,8 @@ function renderList(job) {
     selStep = null; follow = true; detail = null; lastSig = "";
     refresh();
   });
+  if (errors.length) box.insertAdjacentHTML("beforeend",
+    `<div class="alert">有 ${errors.length} 個訓練讀不到：<br><code>${errors.map(esc).join("<br>")}</code><br>常見原因：沒有用專案的虛擬環境啟動（少了 tensorboard 套件）。</div>`);
   const note = document.getElementById("jobnote");
   note.hidden = !job;
   if (job) note.textContent = (job.kind === "video" ? "背景錄影中：" : "背景評估中：") + job.run;
