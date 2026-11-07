@@ -78,6 +78,25 @@ def _scalar(v):
     return None
 
 
+class StatusFile:
+  """把訓練狀態寫到 run 資料夾的 status.json，給監看網站（robodog.monitor）讀。"""
+
+  def __init__(self, path: Path, **fields):
+    self.path = path
+    self.data = {"state": "starting", "pid": os.getpid(), "started": time.time(),
+                 "updated": time.time(), "step": 0, **fields}
+    self.write()
+
+  def update(self, **fields) -> None:
+    self.data.update(fields, updated=time.time())
+    self.write()
+
+  def write(self) -> None:
+    tmp = self.path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(self.data, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, self.path)  # 先寫暫存檔再換名，網站不會讀到寫一半的檔案
+
+
 def main(argv=None) -> None:
   args = _build_parser().parse_args(argv)
   extra = [CONFIG_DIR / "smoke.yaml"] if args.smoke else []
@@ -108,8 +127,14 @@ def main(argv=None) -> None:
   with open(run_dir / "config.yaml", "w", encoding="utf-8") as f:
     yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
 
+  device = _gpu_summary()
+  status = StatusFile(
+      run_dir / "status.json", task=task, name=args.name, device=device,
+      total_steps=int(cfg["ppo"]["num_timesteps"]), num_envs=int(cfg["ppo"]["num_envs"]),
+      resumed_from=None,
+  )
   print(f"[train] 任務：{task}")
-  print(f"[train] 裝置：{_gpu_summary()}")
+  print(f"[train] 裝置：{device}")
   print(f"[train] 輸出：{run_dir}")
 
   # ---- 環境 ----
@@ -132,6 +157,7 @@ def main(argv=None) -> None:
   if args.resume:
     restore = resolve_checkpoint(args.resume).as_posix()
     print(f"[train] 從 {restore} 接續訓練")
+    status.update(resumed_from=restore)
 
   # ---- 紀錄 ----
   writer = SummaryWriter((run_dir / "tb").as_posix())
@@ -156,6 +182,8 @@ def main(argv=None) -> None:
     if sps:
       msg += f" | {sps:,.0f} steps/s"
     print(msg, flush=True)
+    status.update(state="running", step=int(step), reward=r,
+                  sps=sps or status.data.get("sps"), elapsed_min=round(elapsed / 60, 2))
 
   def check_params(step, make_policy, params) -> None:
     # 在存 checkpoint 之前檢查參數有沒有 NaN，有就停下來，避免存到壞掉的權重
@@ -176,8 +204,11 @@ def main(argv=None) -> None:
         seed=cfg.get("seed", 0),
         **ppo_kwargs,
     )
-  except Exception as e:  # noqa: BLE001
+  except BaseException as e:  # noqa: BLE001  （含 Ctrl+C）
     text = str(e)
+    stopped = isinstance(e, KeyboardInterrupt)
+    status.update(state="stopped" if stopped else "failed",
+                  error=None if stopped else f"{type(e).__name__}: {text[:500]}")
     if "RESOURCE_EXHAUSTED" in text or "out of memory" in text.lower():
       half = max(ppo_cfg["num_envs"] // 2, 1)
       print("\n[train] 顯示卡記憶體不足！")
@@ -188,6 +219,7 @@ def main(argv=None) -> None:
     writer.close()
 
   total = time.time() - t0
+  status.update(state="done", elapsed_min=round(total / 60, 2))
   summary = {"task": task, "minutes": round(total / 60, 2), "run_dir": run_dir.as_posix()}
   with open(run_dir / "summary.json", "w", encoding="utf-8") as f:
     json.dump(summary, f, ensure_ascii=False, indent=2)

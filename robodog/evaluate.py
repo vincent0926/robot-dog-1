@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 
 TARGETS = {
     "walk": {"vel_error_mps": ("<", 0.15), "fall_rate": ("<", 0.05)},
@@ -130,7 +131,7 @@ def main(argv=None) -> None:
   p.add_argument("--episodes", type=int, default=256, help="同時評估幾個回合")
   p.add_argument("--impl", default=None, help="覆寫物理引擎實作：warp 或 jax")
   p.add_argument("--seed", type=int, default=1)
-  p.add_argument("--json", default=None, help="把結果另存成 JSON")
+  p.add_argument("--json", default=None, help="結果另存的 JSON 路徑（預設存到該次訓練資料夾的 eval.json）")
   args = p.parse_args(argv)
 
   import jax
@@ -152,10 +153,14 @@ def main(argv=None) -> None:
       mark = f"   目標 {op} {target}  {'✅ 通過' if verdict[k] else '❌ 未達標'}"
     print(f"  {k:16s} {v:8.4f}{mark}")
 
-  if args.json:
-    with open(args.json, "w", encoding="utf-8") as f:
-      json.dump({"task": task, "checkpoint": str(ckpt), **result,
-                 "passed": all(verdict.values())}, f, ensure_ascii=False, indent=2)
+  out = args.json or (ckpt.parent.parent / "eval.json")
+  with open(out, "w", encoding="utf-8") as f:
+    json.dump({"task": task, "checkpoint": str(ckpt), "step": int(ckpt.name),
+               "episodes": args.episodes, **result,
+               "targets": {k: list(v) for k, v in TARGETS.get(task, {}).items()},
+               "verdict": verdict, "passed": all(verdict.values()), "time": time.time()},
+              f, ensure_ascii=False, indent=2)
+  print(f"結果已存到 {out}")
 
 
 if __name__ == "__main__":

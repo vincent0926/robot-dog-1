@@ -119,7 +119,43 @@ runs/walk/20261105-200000-first/
 
 `runs/walk/latest` 會自動指到最新一次 walk 訓練的最後一個 checkpoint。
 
-### 看訓練曲線
+### 監看網站（建議）
+
+再開一個 Ubuntu 視窗，啟動監看網站：
+
+```bash
+cd ~/robot-dog-1 && source .venv/bin/activate
+python -m robodog.monitor
+```
+
+用瀏覽器打開 http://localhost:8000 。這個網頁會：
+
+- 列出 `runs/` 底下所有訓練，標出狀態（訓練中、完成、已中斷、失敗），每 10 秒自動更新
+- 顯示進度條、每秒步數、預計剩餘時間
+- 有新的 checkpoint 就在背景**用 CPU 錄影片**（不搶訓練用的顯示卡），點 reward 曲線上的點就能看那個時間點的機器狗
+- 把每一項 reward 畫成小圖，看得出是哪一項在拉動總分
+- 訓練完成後**自動跑正式評估**，直接顯示有沒有通過 PRD 的驗收標準
+
+監看網站可以先開著，之後才開始訓練也沒關係，新的訓練會自動出現。
+
+錄影需要離屏算圖，第一次請先安裝：
+
+```bash
+sudo apt install -y libosmesa6 libegl1
+```
+
+**用手機看**：電腦和手機要連同一個 Wi-Fi。WSL2 預設不讓外部連線，請在 Windows 的使用者資料夾（`C:\Users\你的帳號\`）建立 `.wslconfig` 檔案，內容是：
+
+```ini
+[wsl2]
+networkingMode=mirrored
+```
+
+存檔後在 PowerShell 執行 `wsl --shutdown`，重新打開 Ubuntu。之後啟動 `robodog.monitor` 時印出的「區網」網址，就可以在手機上打開。如果手機還是連不上，請在 Windows 防火牆允許 8000 port 的連入連線。
+
+想在外面（不同網路）也能看，可以在電腦和手機都安裝 Tailscale，再用 Tailscale 給的 IP 連線。
+
+### 看訓練曲線（TensorBoard）
 
 另開一個 Ubuntu 視窗：
 
@@ -193,6 +229,8 @@ robodog/
   evaluate.py       依 PRD 的驗收標準評估
   play.py           3D 視窗 / 錄影
   progress_video.py 每個 checkpoint 錄一段影片，看訓練過程
+  monitor.py        監看網站（python -m robodog.monitor）
+  monitor_static/   監看網站的網頁
   config.py         YAML 讀取與 --set 覆寫
   policy_io.py      找 checkpoint、載入策略
   envs/__init__.py  任務註冊表（walk / getup 直接用 Playground 的 Go1 環境）

@@ -66,6 +66,7 @@ def main(argv=None) -> None:
   p.add_argument("--fps", type=int, default=25)
   p.add_argument("--seed", type=int, default=0)
   p.add_argument("--only-new", action="store_true", help="已經錄過的 checkpoint 跳過")
+  p.add_argument("--impl", default=None, help="覆寫物理引擎實作：warp 或 jax（訓練中錄影建議用 jax + CPU，不搶顯示卡）")
   args = p.parse_args(argv)
 
   import imageio
@@ -89,7 +90,10 @@ def main(argv=None) -> None:
   if (out_dir / "progress.json").exists():
     previous = {c["step"]: c for c in json.loads((out_dir / "progress.json").read_text())["clips"]}
 
-  env = envs.make_env(task, cfg.get("env") or {})
+  env_cfg = dict(cfg.get("env") or {})
+  if args.impl:
+    env_cfg["impl"] = args.impl
+  env = envs.make_env(task, env_cfg)
   network = brax_ckpt.get_network(_load_network_config(ckpts[-1]), ppo_networks.make_ppo_networks)
   make_policy = ppo_networks.make_inference_fn(network)
 

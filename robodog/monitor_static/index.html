@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Robodog 訓練監看</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* 版面：儀器面板。左欄 = 訓練清單；右欄 = 狀態列 → 指標 → 影片＋曲線 → 各項 reward 小圖。窄螢幕上下堆疊。 */
+:root {
+  --bg: #f2f5f4; --surface: #ffffff; --sunk: #e8eeec; --fg: #14201d; --muted: #5b6a66;
+  --line: #d4dedb; --accent: #0c7867; --accent-soft: #d3ebe5; --warn: #b4552a; --warn-soft: #f6e3d9;
+  --good: #2c7a34; --run: #1f6fd1;
+  --font-body: "IBM Plex Sans", "PingFang TC", "Microsoft JhengHei", "Noto Sans TC", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root {
+  --bg: #0c1211; --surface: #131b19; --sunk: #0f1715; --fg: #e1e9e6; --muted: #8d9e99;
+  --line: #24302d; --accent: #3bbfa6; --accent-soft: #163932; --warn: #e2895b; --warn-soft: #3a2419;
+  --good: #6cc070; --run: #6aa9ff; color-scheme: dark; } }
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.55 var(--font-body);
+  padding: env(safe-area-inset-top, 0px) 0 env(safe-area-inset-bottom, 0px); }
+button { font: inherit; color: inherit; }
+.app { display: grid; grid-template-columns: 290px minmax(0, 1fr); min-height: 100vh; }
+@media (max-width: 880px) { .app { grid-template-columns: minmax(0, 1fr); } }
+
+/* ---- 左欄 ---- */
+aside { min-width: 0; border-right: 1px solid var(--line); background: var(--surface); padding: 18px 14px;
+  padding-left: max(14px, env(safe-area-inset-left, 0px)); display: grid; gap: 14px; align-content: start; }
+@media (max-width: 880px) { aside { border-right: 0; border-bottom: 1px solid var(--line);
+  padding-right: max(14px, env(safe-area-inset-right, 0px)); } }
+.brand { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.brand h1 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
+.tick { font: 11.5px var(--font-mono); color: var(--muted); }
+.tick.stale { color: var(--warn); }
+.runlist { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; max-height: calc(100vh - 140px); overflow-y: auto; }
+@media (max-width: 880px) { .runlist { max-height: 230px; } }
+.group { font-size: 11.5px; font-weight: 600; letter-spacing: .08em; color: var(--muted); margin: 8px 2px 0; }
+.run { text-align: left; border: 1px solid var(--line); background: transparent; border-radius: 8px;
+  padding: 9px 10px; cursor: pointer; display: grid; gap: 6px; width: 100%; min-width: 0; }
+.run:hover { border-color: var(--accent); }
+.run[aria-current="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.run:focus-visible, .chip:focus-visible, .pt:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.run .top { min-width: 0; display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.run .nm { flex: 1; font: 12.5px var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.run .meta { display: flex; gap: 8px; justify-content: space-between; font: 11.5px var(--font-mono); color: var(--muted); }
+.mini { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.mini > i { display: block; height: 100%; background: var(--accent); }
+.jobnote { font-size: 12.5px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 10px; }
+
+/* ---- 狀態 ---- */
+.pill { font: 11.5px var(--font-mono); padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); white-space: nowrap; }
+.pill.running { color: var(--run); border-color: var(--run); }
+.pill.running::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--run); margin-right: 6px; vertical-align: 1px; animation: blink 1.6s infinite; }
+.pill.done { color: var(--good); border-color: var(--good); }
+.pill.failed, .pill.interrupted, .pill.stopped { color: var(--warn); border-color: var(--warn); }
+@keyframes blink { 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .pill.running::before { animation: none; } }
+
+/* ---- 右欄 ---- */
+main { padding-block: 22px 48px; padding-left: max(20px, env(safe-area-inset-left, 0px));
+  padding-right: max(20px, env(safe-area-inset-right, 0px)); display: grid; gap: 18px; align-content: start; min-width: 0; }
+@media (max-width: 880px) { main { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); } }
+.head { display: grid; gap: 10px; }
+.head .row { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.head h2 { margin: 0; font-size: 22px; font-weight: 600; text-wrap: balance; word-break: break-all; }
+.facts { font: 12.5px var(--font-mono); color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.facts b { color: var(--fg); font-weight: 500; }
+.bar { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; }
+.bar > i { display: block; height: 100%; background: var(--accent); transition: width .6s; }
+
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.kpi { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: grid; gap: 2px; }
+.kpi .k { font-size: 12.5px; color: var(--muted); }
+.kpi .v { font: 500 24px var(--font-mono); font-variant-numeric: tabular-nums; }
+.kpi .d { font: 12px var(--font-mono); color: var(--muted); }
+.up { color: var(--good); } .down { color: var(--warn); }
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; display: grid; gap: 12px; align-content: start; min-width: 0; }
+.panel h3 { margin: 0; font-size: 12.5px; font-weight: 600; letter-spacing: .07em; color: var(--muted); }
+.two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; }
+@media (max-width: 1100px) { .two { grid-template-columns: minmax(0, 1fr); } }
+video { width: 100%; max-width: 100%; aspect-ratio: 3 / 2; background: #000; border-radius: 6px; display: block; }
+.novideo { aspect-ratio: 3 / 2; display: grid; place-items: center; text-align: center; padding: 20px;
+  background: var(--sunk); border-radius: 6px; color: var(--muted); font-size: 14px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font: 12.5px var(--font-mono); padding: 4px 9px; border-radius: 6px; cursor: pointer; border: 1px solid var(--line); background: transparent; }
+.chip:hover { border-color: var(--accent); }
+.chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+.chip.follow[aria-pressed="true"] { background: transparent; color: var(--accent); }
+.now { font: 12.5px var(--font-mono); color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.now b { color: var(--fg); font-weight: 500; }
+.hint { margin: 0; font-size: 13px; color: var(--muted); }
+
+svg { display: block; width: 100%; height: auto; overflow: visible; }
+.ax text { fill: var(--muted); font: 11px var(--font-mono); }
+.ax line, .gr line { stroke: var(--line); }
+.ln { fill: none; stroke: var(--accent); stroke-width: 2.2; }
+.ar { fill: var(--accent-soft); }
+.pt { fill: var(--surface); stroke: var(--accent); stroke-width: 2; cursor: pointer; }
+.pt.sel { fill: var(--accent); }
+.pt.novid { stroke: var(--muted); cursor: default; }
+.endlbl { fill: var(--fg); font: 11px var(--font-mono); }
+
+.comps { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.comp { border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px 6px; display: grid; gap: 2px; min-width: 0; }
+.comp .t { display: flex; justify-content: space-between; gap: 6px; font-size: 12.5px; }
+.comp .t span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.comp .t span:last-child { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.comp .en { font: 10.5px var(--font-mono); color: var(--muted); }
+.comp svg .sl { fill: none; stroke-width: 1.6; }
+.comp.pos .sl { stroke: var(--accent); } .comp.neg .sl { stroke: var(--warn); }
+.comp svg .z { stroke: var(--line); stroke-dasharray: 2 3; }
+
+.evalbox { display: grid; gap: 10px; }
+.evrow { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; align-items: baseline;
+  padding: 8px 0; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+.evrow:last-child { border-bottom: 0; }
+.evrow .val { font-family: var(--font-mono); }
+.evrow .tg { font: 12px var(--font-mono); color: var(--muted); }
+.verdict { font-weight: 600; }
+.verdict.pass { color: var(--good); } .verdict.fail { color: var(--warn); }
+.alert { border: 1px solid var(--warn); background: var(--warn-soft); border-radius: 8px; padding: 10px 12px; font-size: 13.5px; }
+.alert code { font-family: var(--font-mono); font-size: 12px; word-break: break-all; }
+
+.tablebox { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; min-width: 520px; }
+th, td { text-align: right; padding: 7px 9px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+th { font-weight: 500; color: var(--muted); font-size: 12px; }
+td { font-family: var(--font-mono); }
+tbody tr { cursor: pointer; }
+tr.sel td { background: var(--accent-soft); }
+
+.empty { max-width: 640px; display: grid; gap: 12px; }
+.empty pre { background: var(--sunk); border-radius: 8px; padding: 12px; overflow-x: auto; font: 13px var(--font-mono); margin: 0; }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside>
+    <div class="brand"><h1>Robodog 訓練監看</h1><span class="tick" id="tick">連線中…</span></div>
+    <div class="runlist" id="runlist" aria-label="訓練清單"></div>
+    <div class="jobnote" id="jobnote" hidden></div>
+  </aside>
+  <main id="main"><p class="hint">讀取中…</p></main>
+</div>
+
+<script>
+const POLL_MS = 10000;
+const TASK = { walk: "行走", getup: "站起", navigate: "導航避障" };
+const STATE = { running: "訓練中", starting: "啟動中", done: "完成", failed: "失敗", interrupted: "已中斷", stopped: "已停止" };
+const LABELS = {
+  walk: { tracking_lin_vel: "直線速度追蹤", tracking_ang_vel: "轉向追蹤", lin_vel_z: "上下彈跳", ang_vel_xy: "左右搖晃",
+    orientation: "機身傾斜", dof_pos_limits: "關節頂到極限", pose: "維持站姿", termination: "跌倒", stand_still: "指令為 0 時站好",
+    torques: "力矩", action_rate: "動作抖動", energy: "耗能", feet_clearance: "抬腳高度", feet_height: "腳步高度",
+    feet_slip: "腳打滑", feet_air_time: "腳騰空時間" },
+  getup: { orientation: "機身朝上", torso_height: "機身高度", posture: "關節姿勢", stand_still: "站穩不動", action_rate: "動作抖動",
+    dof_pos_limits: "關節頂到極限", torques: "力矩", dof_acc: "關節加速度", dof_vel: "關節速度" },
+  navigate: { progress: "往目標前進", heading: "面向目標", reached: "抵達目標", collision: "碰撞或出界", fall: "跌倒",
+    action_rate: "指令變化", time: "時間成本" },
+};
+const EVAL_LABEL = { vel_error_mps: ["速度誤差", v => v.toFixed(3) + " m/s"], fall_rate: ["跌倒率", pc],
+  success_rate: ["5 秒內站穩", pc], reach_rate: ["抵達率", pc], collision_rate: ["碰撞率", pc], timeout_rate: ["超時率", pc] };
+function pc(v) { return (v * 100).toFixed(1) + "%"; }
+const fmt = n => n == null ? "—" : n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 1 : 2) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(Math.round(n));
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const ago = t => { const s = Math.max(0, Date.now() / 1000 - t); return s < 90 ? Math.round(s) + " 秒前" : s < 5400 ? Math.round(s / 60) + " 分鐘前" : Math.round(s / 3600) + " 小時前"; };
+const minutes = m => m == null ? "—" : m < 1 ? "不到 1 分鐘" : m < 90 ? Math.round(m) + " 分鐘" : (m / 60).toFixed(1) + " 小時";
+
+let runs = [], selected = null, detail = null, selStep = null, follow = true, lastOk = 0, lastSig = "";
+
+function selectedFromHash() {
+  const h = decodeURIComponent(location.hash.slice(1));
+  const i = h.indexOf("/");
+  return i > 0 ? { task: h.slice(0, i), name: h.slice(i + 1) } : null;
+}
+
+async function getJSON(url) {
+  const r = await fetch(url, { cache: "no-store" });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status);
+  return r.json();
+}
+
+async function refresh() {
+  try {
+    const data = await getJSON("/api/runs");
+    runs = data.runs; lastOk = Date.now();
+    if (!selected || !runs.some(r => r.task === selected.task && r.name === selected.name)) {
+      const fromHash = selectedFromHash();
+      const pick = (fromHash && runs.find(r => r.task === fromHash.task && r.name === fromHash.name))
+        || runs.find(r => r.state === "running") || runs[0];
+      selected = pick ? { task: pick.task, name: pick.name } : null;
+    }
+    renderList(data.job);
+    if (selected) {
+      const fresh = await getJSON(`/api/run?task=${encodeURIComponent(selected.task)}&name=${encodeURIComponent(selected.name)}`);
+      const sig = JSON.stringify(fresh);
+      if (sig !== lastSig) { detail = fresh; lastSig = sig; renderDetail(); }
+    } else renderEmpty(data.root);
+  } catch (e) {
+    document.getElementById("tick").textContent = "連不上監看程式：" + e.message;
+    document.getElementById("tick").classList.add("stale");
+    return;
+  }
+  updateTick();
+}
+
+function updateTick() {
+  const t = document.getElementById("tick");
+  t.classList.remove("stale");
+  t.textContent = lastOk ? "更新於 " + new Date(lastOk).toLocaleTimeString("zh-TW", { hour12: false }) : "";
+}
+
+function renderList(job) {
+  const box = document.getElementById("runlist");
+  const byTask = {};
+  runs.forEach(r => (byTask[r.task] ||= []).push(r));
+  box.innerHTML = Object.keys(byTask).map(task => `<div class="group">${esc(TASK[task] || task)}</div>` +
+    byTask[task].map(r => {
+      const cur = selected && r.task === selected.task && r.name === selected.name;
+      const pct = r.total_steps ? Math.min(100, r.step / r.total_steps * 100) : 0;
+      return `<button class="run" type="button" data-task="${esc(r.task)}" data-name="${esc(r.name)}" aria-current="${cur}">
+        <span class="top"><span class="nm" title="${esc(r.name)}">${esc(r.name)}</span><span class="pill ${r.state}">${STATE[r.state] || r.state}</span></span>
+        <span class="mini"><i style="width:${pct.toFixed(1)}%"></i></span>
+        <span class="meta"><span>${fmt(r.step)} / ${fmt(r.total_steps)}</span><span>reward ${r.reward == null ? "—" : r.reward.toFixed(1)}</span></span>
+      </button>`;
+    }).join("")).join("");
+  box.querySelectorAll(".run").forEach(b => b.onclick = () => {
+    selected = { task: b.dataset.task, name: b.dataset.name };
+    location.hash = encodeURIComponent(selected.task + "/" + selected.name);
+    selStep = null; follow = true; detail = null; lastSig = "";
+    refresh();
+  });
+  const note = document.getElementById("jobnote");
+  note.hidden = !job;
+  if (job) note.textContent = (job.kind === "video" ? "背景錄影中：" : "背景評估中：") + job.run;
+}
+
+function renderEmpty(root) {
+  document.getElementById("main").innerHTML = `<div class="empty">
+    <h2>還沒有任何訓練</h2>
+    <p class="hint">監看程式正在讀 <code>${esc(root)}</code>。開一個新的終端機開始訓練，這裡會自動出現：</p>
+    <pre>python -m robodog.train configs/walk.yaml --name first</pre></div>`;
+}
+
+function kpis(d) {
+  const P = d.points, last = P[P.length - 1], prev = P[P.length - 2];
+  const out = [];
+  if (last) {
+    const dlt = prev ? last.reward - prev.reward : null;
+    out.push(["評估 reward", last.reward.toFixed(2), dlt == null ? "第一次評估" :
+      `<span class="${dlt >= 0 ? "up" : "down"}">${dlt >= 0 ? "▲" : "▼"} ${Math.abs(dlt).toFixed(2)}</span> 比上次`]);
+    if (last.length != null) out.push(["平均存活步數", `${Math.round(last.length)}`, `滿分 ${d.episode_length || "—"}（撐滿 = 沒跌倒）`]);
+  }
+  const comp = (n) => { const a = d.components[n]; return a && a.length ? a[a.length - 1] : null; };
+  if (d.task === "walk") {
+    const withFwd = P.filter(p => p.fwd != null);
+    const f = withFwd.length ? withFwd[withFwd.length - 1] : null;
+    out.push(["指令 1 m/s 實際前進", f ? f.fwd.toFixed(2) + " m/s" : "—", f ? `${fmt(f.step)} 步的影片量的` : "還沒有影片"]);
+    const t = comp("termination");
+    if (t != null) out.push(["跌倒率（約）", (Math.min(1, -t) * 100).toFixed(1) + "%", "訓練中評估換算；正式數字看下方評估"]);
+  } else if (d.task === "navigate") {
+    const r = comp("reached"), c = comp("collision"), f = comp("fall");
+    if (r != null) out.push(["抵達率（約）", (r / 10 * 100).toFixed(1) + "%", "由抵達獎勵換算"]);
+    if (c != null) out.push(["碰撞率（約）", (-c / 10 * 100).toFixed(1) + "%", "由碰撞懲罰換算"]);
+  }
+  return out.map(([k, v, s]) => `<div class="kpi"><span class="k">${k}</span><span class="v">${v}</span><span class="d">${s}</span></div>`).join("");
+}
+
+function evalPanel(d) {
+  const e = d.eval;
+  if (!e) {
+    if (d.job && d.job.kind === "eval") return `<div class="panel"><h3>正式評估</h3><p class="hint">評估中（${ago(d.job.since)}開始）…</p></div>`;
+    if (d.status.state === "done") return `<div class="panel"><h3>正式評估</h3><p class="hint">等待背景評估。也可以手動執行：<code>python -m robodog.evaluate runs/${esc(d.task)}/${esc(d.name)}</code></p></div>`;
+    return "";
+  }
+  const rows = Object.entries(EVAL_LABEL).filter(([k]) => k in e).map(([k, [lbl, f]]) => {
+    const tg = e.targets && e.targets[k];
+    const v = e.verdict && k in e.verdict ? e.verdict[k] : null;
+    return `<div class="evrow"><span>${lbl}</span><span class="val">${f(e[k])}</span>
+      <span class="tg">${tg ? `目標 ${tg[0]} ${k.endsWith("_mps") ? tg[1] : pc(tg[1])} ` : ""}${v == null ? "" : `<span class="verdict ${v ? "pass" : "fail"}">${v ? "通過" : "未達標"}</span>`}</span></div>`;
+  }).join("");
+  return `<div class="panel evalbox"><h3>正式評估 · ${fmt(e.step)} 步 · ${e.episodes || ""} 回合</h3>${rows}
+    <p class="hint">${e.passed ? "全部通過 PRD 驗收標準。" : "還沒有全部達標。"}評估方式：每回合隨機給一個速度指令，跑完整回合。</p></div>`;
+}
+
+function chart(d) {
+  const P = d.points;
+  if (!P.length) return `<p class="hint">第一次評估完成後會出現曲線（訓練一開始會先評估一次）。</p>`;
+  const W = 560, H = 270, m = { l: 46, r: 18, t: 16, b: 32 };
+  const maxX = Math.max(d.total_steps || 0, ...P.map(p => p.step), 1);
+  const ys = P.map(p => p.reward);
+  let lo = Math.min(0, ...ys), hi = Math.max(...ys);
+  if (hi - lo < 1e-6) hi = lo + 1;
+  const pad = (hi - lo) * 0.08; hi += pad; if (lo < 0) lo -= pad;
+  const x = s => m.l + s / maxX * (W - m.l - m.r);
+  const y = v => H - m.b - (v - lo) / (hi - lo) * (H - m.t - m.b);
+  let g = "";
+  for (let i = 0; i <= 4; i++) { const v = lo + (hi - lo) * i / 4;
+    g += `<g class="gr"><line x1="${m.l}" x2="${W - m.r}" y1="${y(v)}" y2="${y(v)}"/></g><g class="ax"><text x="${m.l - 8}" y="${y(v) + 4}" text-anchor="end">${Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(1)}</text></g>`; }
+  for (let i = 0; i <= 4; i++) { const s = maxX * i / 4;
+    g += `<g class="ax"><text x="${x(s)}" y="${H - m.b + 18}" text-anchor="${i === 0 ? "start" : i === 4 ? "end" : "middle"}">${fmt(s)}</text></g>`; }
+  const line = P.map((p, i) => `${i ? "L" : "M"}${x(p.step).toFixed(1)},${y(p.reward).toFixed(1)}`).join("");
+  g += `<path class="ar" d="${line}L${x(P[P.length - 1].step).toFixed(1)},${y(lo)}L${x(P[0].step).toFixed(1)},${y(lo)}Z"/><path class="ln" d="${line}"/>`;
+  P.forEach(p => {
+    g += `<circle class="pt ${p.video ? "" : "novid"} ${p.step === selStep ? "sel" : ""}" data-step="${p.step}" cx="${x(p.step)}" cy="${y(p.reward)}" r="5"` +
+      (p.video ? ` tabindex="0" role="button" aria-label="播放 ${fmt(p.step)} 步的影片"` : "") + `><title>${fmt(p.step)} 步：${p.reward.toFixed(2)}</title></circle>`;
+  });
+  const L = P[P.length - 1], right = L.step > maxX * 0.8;
+  g += `<text class="endlbl" x="${x(L.step) + (right ? -9 : 9)}" y="${y(L.reward) - 10}" text-anchor="${right ? "end" : "start"}">${L.reward.toFixed(1)}</text>`;
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="評估 reward 隨訓練步數變化">${g}</svg>`;
+}
+
+function spark(vals) {
+  const W = 180, H = 40, v = vals.map(a => a == null ? 0 : a);
+  if (!v.length) return "";
+  let lo = Math.min(0, ...v), hi = Math.max(0, ...v); if (hi - lo < 1e-9) hi = lo + 1;
+  const x = i => v.length === 1 ? W / 2 : i / (v.length - 1) * W, y = a => 3 + (hi - a) / (hi - lo) * (H - 6);
+  const d = v.map((a, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(a).toFixed(1)}`).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true"><line class="z" x1="0" x2="${W}" y1="${y(0)}" y2="${y(0)}"/><path class="sl" d="${d}"/></svg>`;
+}
+
+function comps(d) {
+  const lbl = LABELS[d.task] || {};
+  const names = Object.keys(d.components).sort((a, b) => {
+    const la = d.components[a].at(-1) ?? 0, lb = d.components[b].at(-1) ?? 0;
+    return Math.abs(lb) - Math.abs(la);
+  });
+  if (!names.length) return "";
+  return `<div class="panel"><h3>各項 reward（每回合加總，依影響大小排序）</h3>
+    <p class="hint">綠色是獎勵、橘色是懲罰。總分卡住時，看哪一項在拉後腿。</p>
+    <div class="comps">${names.map(n => { const a = d.components[n], last = a.at(-1) ?? 0;
+      return `<div class="comp ${last >= 0 ? "pos" : "neg"}"><div class="t"><span>${esc(lbl[n] || n)}</span><span>${Math.abs(last) >= 100 ? last.toFixed(0) : last.toFixed(2)}</span></div>
+        <span class="en">${esc(n)}</span>${spark(a)}</div>`; }).join("")}</div></div>`;
+}
+
+function table(d) {
+  if (!d.points.length) return "";
+  const rows = d.points.slice().reverse().map(p => `<tr data-step="${p.step}" class="${p.step === selStep ? "sel" : ""}">
+    <td>${fmt(p.step)}</td><td>${p.reward.toFixed(2)}</td><td>${p.length == null ? "—" : Math.round(p.length)}</td>
+    ${d.task === "walk" ? `<td>${p.fwd == null ? "—" : p.fwd.toFixed(2) + " m/s"}</td>` : ""}<td>${p.video ? "▶" : "—"}</td></tr>`).join("");
+  return `<div class="panel"><h3>每次評估</h3><div class="tablebox"><table>
+    <thead><tr><th>步數</th><th>reward</th><th>存活步數</th>${d.task === "walk" ? "<th>指令 1 m/s 實際前進</th>" : ""}<th>影片</th></tr></thead>
+    <tbody>${rows}</tbody></table></div></div>`;
+}
+
+function renderDetail() {
+  const d = detail, st = d.status;
+  const withVid = d.points.filter(p => p.video);
+  if (follow || !withVid.some(p => p.step === selStep)) selStep = withVid.length ? withVid[withVid.length - 1].step : null;
+  const pct = d.total_steps ? Math.min(100, d.step / d.total_steps * 100) : 0;
+  const facts = [
+    `<span><b>${fmt(d.step)}</b> / ${fmt(d.total_steps)} 步（${pct.toFixed(0)}%）</span>`,
+    d.sps ? `<span><b>${Math.round(d.sps).toLocaleString()}</b> 步/秒</span>` : "",
+    d.eta_min != null ? `<span>預計剩 <b>${minutes(d.eta_min)}</b></span>` : "",
+    st.elapsed_min != null ? `<span>已訓練 <b>${minutes(st.elapsed_min)}</b></span>` : "",
+    st.updated ? `<span>上次回報 ${ago(st.updated)}</span>` : "",
+    d.num_envs ? `<span>${d.num_envs} 個環境</span>` : "",
+    st.device ? `<span>${esc(st.device)}</span>` : "",
+  ].join("");
+  let alerts = "";
+  if (st.state === "failed") alerts += `<div class="alert"><b>訓練失敗。</b> <code>${esc(st.error || "")}</code></div>`;
+  if (st.state === "interrupted") alerts += `<div class="alert">這次訓練被中斷了（程式被關掉或當機）。可以接續：<code>python -m robodog.train &lt;設定檔&gt; --resume runs/${esc(d.task)}/${esc(d.name)}</code></div>`;
+  if (st.resumed_from) alerts += `<p class="hint">這次是接續訓練，步數從 0 重新算。接續自 <code>${esc(st.resumed_from)}</code></p>`;
+  if (d.video_error) alerts += `<div class="alert">${esc(d.video_error)}</div>`;
+
+  const sel = d.points.find(p => p.step === selStep);
+  const vidHTML = sel ? `<video id="vid" controls muted autoplay loop playsinline></video>` :
+    `<div class="novideo">${d.pending_videos.length ? `有 ${d.pending_videos.length} 個 checkpoint 等待錄影${d.job && d.job.kind === "video" ? "，錄影中…" : "…"}` : "存第一個 checkpoint 後會自動錄影片。"}</div>`;
+
+  const main = document.getElementById("main");
+  const oldVid = document.getElementById("vid");
+  const keepTime = oldVid && oldVid.dataset.step == String(selStep) ? oldVid.currentTime : null;
+  main.innerHTML = `
+    <section class="head">
+      <div class="row"><h2>${esc(TASK[d.task] || d.task)} · ${esc(d.name)}</h2><span class="pill ${st.state}">${STATE[st.state] || st.state}</span></div>
+      <div class="bar"><i style="width:${pct.toFixed(1)}%"></i></div>
+      <div class="facts">${facts}</div>
+    </section>
+    ${alerts}
+    <section class="kpis">${kpis(d)}</section>
+    ${evalPanel(d)}
+    <section class="two">
+      <div class="panel"><h3>機器狗在這個時間點的樣子</h3>${vidHTML}
+        <div class="now" id="now"></div>
+        <div class="chips">${withVid.length ? `<button class="chip follow" type="button" id="follow" aria-pressed="${follow}">跟隨最新</button>` : ""}
+          ${withVid.map(p => `<button class="chip" type="button" data-step="${p.step}" aria-pressed="${p.step === selStep}">${fmt(p.step)}</button>`).join("")}</div>
+        ${d.task === "walk" ? `<p class="hint">每段 8 秒，指令劇本固定：前進 1 m/s → 邊走邊左轉 → 向左平移 → 後退 → 停。</p>` : ""}
+      </div>
+      <div class="panel"><h3>評估 reward</h3>${chart(d)}<p class="hint">點圓點切換影片；空心灰點代表那次沒有存 checkpoint。</p></div>
+    </section>
+    ${comps(d)}
+    ${table(d)}`;
+
+  if (sel) {
+    const v = document.getElementById("vid");
+    v.dataset.step = selStep;
+    v.src = `/media/${encodeURIComponent(d.task)}/${encodeURIComponent(d.name)}/${encodeURIComponent(sel.video)}`;
+    if (keepTime != null) v.addEventListener("loadedmetadata", () => { v.currentTime = keepTime; }, { once: true });
+    v.play().catch(() => {});
+    document.getElementById("now").innerHTML = `<span>步數 <b>${fmt(sel.step)}</b></span><span>reward <b>${sel.reward.toFixed(2)}</b></span>` +
+      (sel.fwd != null ? `<span>指令 1 m/s → 實際 <b>${sel.fwd.toFixed(2)} m/s</b></span>` : "") +
+      (sel.falls != null ? `<span>8 秒內跌倒 <b>${sel.falls}</b> 次</span>` : "");
+  }
+  const pick = s => { selStep = s; follow = false; renderDetail(); };
+  main.querySelectorAll(".chip[data-step]").forEach(b => b.onclick = () => pick(+b.dataset.step));
+  const fb = document.getElementById("follow"); if (fb) fb.onclick = () => { follow = !follow; renderDetail(); };
+  main.querySelectorAll(".pt:not(.novid)").forEach(c => {
+    c.addEventListener("click", () => pick(+c.dataset.step));
+    c.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(+c.dataset.step); } });
+  });
+  main.querySelectorAll("tbody tr").forEach(r => r.onclick = () => {
+    const p = d.points.find(q => q.step === +r.dataset.step); if (p && p.video) pick(p.step);
+  });
+}
+
+window.addEventListener("hashchange", () => { const h = selectedFromHash(); if (h) { selected = h; follow = true; lastSig = ""; refresh(); } });
+refresh();
+setInterval(refresh, POLL_MS);
+setInterval(() => { if (lastOk && Date.now() - lastOk > POLL_MS * 3) { const t = document.getElementById("tick"); t.textContent = "超過 30 秒沒更新"; t.classList.add("stale"); } }, 5000);
+</script>
+</body>
+</html>
