@@ -8,6 +8,14 @@ domain_randomization: false
 
 env:
   impl: jax
+  # 第一次用預設 reward 在 CPU 上練 170 萬步：學會把身體翻正，但一直趴著不站起來（成功率 0%）。
+  # 原因：站高的獎勵差距小（趴著 0.11、站直 0.32），而起身時腿要甩，關節速度懲罰
+  # 會讓每一步總分變負、被截成 0，策略感覺不到「站起來」的好處。所以這裡：
+  reward_config:
+    scales:
+      torso_height: 3.0       # 預設 1.0：站高一點的好處放大
+      dof_vel: -0.01          # 預設 -0.1：甩腿起身不要被重罰
+      dof_acc: -0.0000001     # 預設 -2.5e-7
 
 ppo:
   num_timesteps: 6000000
