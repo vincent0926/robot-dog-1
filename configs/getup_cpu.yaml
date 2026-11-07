@@ -1,0 +1,33 @@
+# 沒有 GPU 時的站起訓練（例如雲端 4 核 CPU）。
+#   python -m robodog.train configs/getup_cpu.yaml
+# 站起要算全身碰撞，4 核 CPU 只有約 500 steps/s，600 萬步約 3.5 小時。
+# 有 GPU 請用 getup.yaml（5,000 萬步）。
+task: getup
+seed: 0
+domain_randomization: false
+
+env:
+  impl: jax
+
+ppo:
+  num_timesteps: 6000000
+  num_evals: 12
+  num_envs: 128
+  num_eval_envs: 32
+  batch_size: 128
+  num_minibatches: 8          # 128 × 8 = 1024，是 128 的倍數
+  num_updates_per_batch: 4
+  unroll_length: 20
+  learning_rate: 0.0003
+  entropy_cost: 0.01
+  discounting: 0.97
+  reward_scaling: 1.0
+  max_grad_norm: 1.0
+  normalize_observations: true
+  num_resets_per_eval: 0
+  action_repeat: 1
+  network:
+    policy_hidden_layer_sizes: [512, 256, 128]
+    value_hidden_layer_sizes: [512, 256, 128]
+    policy_obs_key: state
+    value_obs_key: privileged_state
