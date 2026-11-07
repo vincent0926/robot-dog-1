@@ -1,0 +1,37 @@
+# 沒有 GPU 時的導航避障訓練（例如雲端 4 核 CPU）。
+#   python -m robodog.train configs/navigate_cpu.yaml
+# 導航每一步要跑 5 步行走策略，所以比 walk 慢約 5 倍；這裡把規模縮小。
+task: navigate
+seed: 0
+
+env:
+  impl: jax                            # CPU 只能用 jax 實作
+  # 用哪個 walk 策略當「腳」。這裡指定雲端練好的第二版（已通過驗收）。
+  low_level_policy: runs/walk/20261106-135643-cloud-cpu-v2-resume
+  command_scale: [1.0, 0.5, 1.0]       # 要和 walk 訓練時的指令範圍一致（walk_cpu.yaml 的 a）
+  episode_length: 200                  # 200 步 × 0.1 秒 = 20 秒
+  n_obstacles: 5
+  obstacles_on_path: 3
+
+ppo:
+  num_timesteps: 3000000
+  num_evals: 10
+  num_envs: 128
+  num_eval_envs: 32
+  batch_size: 128
+  num_minibatches: 8                   # 128 × 8 = 1024，是 128 的倍數
+  num_updates_per_batch: 4
+  unroll_length: 20
+  learning_rate: 0.0003
+  entropy_cost: 0.005
+  discounting: 0.99
+  reward_scaling: 1.0
+  max_grad_norm: 1.0
+  normalize_observations: true
+  num_resets_per_eval: 0
+  action_repeat: 1
+  network:
+    policy_hidden_layer_sizes: [256, 128, 64]
+    value_hidden_layer_sizes: [256, 128, 64]
+    policy_obs_key: state
+    value_obs_key: state
