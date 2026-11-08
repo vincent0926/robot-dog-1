@@ -1,0 +1,49 @@
+# 任務四：崎嶇地形行走 + 被推也不倒（往 Spot 那種「哪裡都能走」的方向）
+# 環境是 MuJoCo Playground 的 Go1JoystickRoughTerrain（高度場地形，凹凸不平）。
+# 觀測和 walk 完全一樣，建議從已經會走路的策略接著練（課程學習：先平地、再崎嶇）：
+#   python -m robodog.train configs/rough.yaml --resume runs/walk/latest --name from-walk
+task: rough
+seed: 0
+domain_randomization: true   # 隨機摩擦力、質量、重心
+
+env:
+  impl: warp
+  fall_penalty: 3.0           # 跌倒直接扣分（Playground 會把每步 reward 截到 >= 0，原本的跌倒懲罰幾乎無效）
+  episode_length: 1000        # 20 秒
+  command_config:
+    a: [1.5, 0.8, 1.2]        # 和 walk 相同：前後 1.5 m/s、左右 0.8 m/s、轉向 1.2 rad/s
+  pert_config:
+    enable: true              # 訓練時隨機推機器狗（模擬被撞到、踩空）
+    velocity_kick: [0.0, 2.0] # 推的力道：瞬間給機身 0～2 m/s 的速度
+    kick_durations: [0.05, 0.2]
+    kick_wait_times: [1.0, 3.0]
+  reward_config:
+    scales:                   # 沿用 walk 調好的權重（CPU 實測有效）
+      tracking_lin_vel: 2.0
+      tracking_ang_vel: 1.0
+      pose: 0.1
+      feet_air_time: 0.5
+      feet_clearance: -2.0    # 抬腳夠高才不會被地形絆倒
+      energy: -0.0005
+
+ppo:
+  num_timesteps: 150000000    # 1.5 億步（崎嶇地形比平地難，需要更多經驗）
+  num_evals: 15
+  num_envs: 4096              # 8GB 顯示卡不夠時改 2048
+  batch_size: 256
+  num_minibatches: 32
+  num_updates_per_batch: 4
+  unroll_length: 20
+  learning_rate: 0.0003
+  entropy_cost: 0.01
+  discounting: 0.99           # 看遠一點（約 2 秒），比較會避免跌倒
+  reward_scaling: 1.0
+  max_grad_norm: 1.0
+  normalize_observations: true
+  num_resets_per_eval: 10
+  action_repeat: 1
+  network:
+    policy_hidden_layer_sizes: [512, 256, 128]
+    value_hidden_layer_sizes: [512, 256, 128]
+    policy_obs_key: state
+    value_obs_key: privileged_state

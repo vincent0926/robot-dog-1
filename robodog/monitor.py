@@ -33,7 +33,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 STATIC_DIR = Path(__file__).resolve().parent / "monitor_static"
 CKPT_CONFIG = "ppo_network_config.json"
-DEFAULT_EPISODE_LENGTH = {"walk": 1000, "getup": 300, "navigate": 200}  # 和各環境 default_config 一致
+DEFAULT_EPISODE_LENGTH = {"walk": 1000, "rough": 1000, "getup": 300, "navigate": 200}  # 和各環境 default_config 一致
 
 
 # --------------------------------------------------------------------------- #

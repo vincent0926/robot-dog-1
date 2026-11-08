@@ -1,0 +1,44 @@
+# CPU 版崎嶇地形：從 walk_cpu_fast 練好的 1.5 m/s 策略接著練，加上崎嶇地形和隨機推擠。
+#   python -m robodog.train configs/rough_cpu.yaml --resume runs/walk/<walk_cpu_fast 的 run>
+task: rough
+seed: 2
+domain_randomization: false
+
+env:
+  impl: jax
+  command_config:
+    a: [1.5, 0.8, 1.2]
+  pert_config:
+    enable: true
+    velocity_kick: [0.0, 1.5]   # CPU 版先推輕一點
+  reward_config:
+    scales:                   # 和 walk_cpu.yaml 相同
+      tracking_lin_vel: 2.0
+      tracking_ang_vel: 1.0
+      pose: 0.1
+      feet_air_time: 0.5
+      feet_clearance: -0.5
+      energy: -0.0005
+
+ppo:
+  num_timesteps: 15000000
+  num_evals: 10
+  num_envs: 256
+  num_eval_envs: 64
+  batch_size: 256
+  num_minibatches: 8
+  num_updates_per_batch: 4
+  unroll_length: 20
+  learning_rate: 0.0002       # 接續訓練，學習率小一點，避免把已學會的忘掉
+  entropy_cost: 0.005
+  discounting: 0.97
+  reward_scaling: 1.0
+  max_grad_norm: 1.0
+  normalize_observations: true
+  num_resets_per_eval: 0
+  action_repeat: 1
+  network:
+    policy_hidden_layer_sizes: [512, 256, 128]
+    value_hidden_layer_sizes: [512, 256, 128]
+    policy_obs_key: state
+    value_obs_key: privileged_state

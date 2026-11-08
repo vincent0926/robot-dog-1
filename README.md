@@ -7,6 +7,7 @@
 | `walk` | `configs/walk.yaml` | 跟著搖桿速度指令走路 | 速度誤差 < 0.15 m/s，跌倒率 < 5% |
 | `getup` | `configs/getup.yaml` | 跌倒後自己站起來 | 5 秒內站穩的比例 ≥ 85% |
 | `navigate` | `configs/navigate.yaml` | 繞過障礙物走到目標點 | 抵達率 ≥ 80% |
+| `rough` | `configs/rough.yaml` | 在凹凸不平的地形上跟著指令走，被推也不倒 | 速度誤差 < 0.20 m/s，跌倒率 < 5% |
 
 技術組合：
 
@@ -96,6 +97,12 @@ python -m robodog.train configs/getup.yaml --name first
 
 ```bash
 python -m robodog.train configs/navigate.yaml --name first
+```
+
+崎嶇地形：從會走路的策略接著練（先平地、再崎嶇）：
+
+```bash
+python -m robodog.train configs/rough.yaml --resume runs/walk/latest --name from-walk
 ```
 
 訓練結果存在 `runs/<任務>/<時間>-<名稱>/`：
@@ -312,5 +319,6 @@ python -m robodog.train configs/walk_cpu.yaml
 | P0-8 播放、鍵盤控制、mp4 | ✅ 程式完成（雲端沒有 OpenGL，畫面輸出需要在你的電腦上實測） |
 | P1-1 導航避障 | ✅ 環境完成，待實際訓練 |
 | P1-2 domain randomization | ✅ 已完成（walk / getup） |
-| P1-3 課程學習 | ⬜ 尚未做 |
+| P1-3 課程學習 | 🟡 部分完成：walk 1.0 → 1.5 m/s、平地 → 崎嶇地形（rough）都用接續訓練 |
+| 崎嶇地形 + 被推不倒（rough） | 🟡 環境與設定完成，雲端 CPU 訓練中 |
 | P1-4 記憶體不足提示 | ✅ 已完成（OOM 時提示建議的 num_envs） |

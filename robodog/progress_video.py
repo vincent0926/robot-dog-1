@@ -100,7 +100,7 @@ def main(argv=None) -> None:
   # 策略參數當作 jit 的輸入，換 checkpoint 不用重新編譯
   @jax.jit
   def step(state, cmd, params, rng):
-    if task == "walk":
+    if task in ("walk", "rough"):
       state.info["command"] = cmd
       obs = dict(state.obs)
       obs["state"] = obs["state"].at[-3:].set(cmd)
@@ -133,7 +133,7 @@ def main(argv=None) -> None:
       rng, k = jax.random.split(rng)
       state = step(state, scripted_command(i * env.dt), params, k)
       traj.append(state)
-      if task == "walk" and 1.0 <= i * env.dt < 3.0:  # 劇本前 3 秒是「前進 1 m/s」
+      if task in ("walk", "rough") and 1.0 <= i * env.dt < 3.0:  # 劇本前 3 秒是「前進 1 m/s」
         fwd.append(float(env.get_local_linvel(state.data)[0]))
       if float(state.done) > 0:
         falls += 1
@@ -141,7 +141,7 @@ def main(argv=None) -> None:
         state = reset(k)
     frames = env.render(traj[::every], height=args.height, width=args.width, camera=CAMERA[task])
     fwd_speed = float(np.mean(fwd)) if fwd else None
-    extra = f"   fwd {fwd_speed:.2f} m/s (cmd 1.0)   falls {falls}" if task == "walk" else ""
+    extra = f"   fwd {fwd_speed:.2f} m/s (cmd 1.0)   falls {falls}" if task in ("walk", "rough") else ""
     frames = _label(frames, text + extra)
     imageio.mimsave(path, frames, fps=fps, macro_block_size=8)
     clips.append(frames)

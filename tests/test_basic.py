@@ -30,10 +30,11 @@ def test_deep_merge_and_set():
 
 
 def test_all_configs_load_and_match_env_fields():
-  for name in ("walk", "getup", "navigate"):
+  for name in ("walk", "getup", "navigate", "rough"):
     cfg = rcfg.load_config(f"configs/{name}.yaml")
     env_cfg = envs.default_env_config(cfg["task"])
-    rcfg.update_config_dict(env_cfg, cfg["env"])  # 欄位打錯字會在這裡報錯
+    env_over = {k: v for k, v in cfg["env"].items() if k != "fall_penalty"}  # fall_penalty 是我們自己加的欄位
+    rcfg.update_config_dict(env_cfg, env_over)  # 欄位打錯字會在這裡報錯
     n, b, m = cfg["ppo"]["num_envs"], cfg["ppo"]["batch_size"], cfg["ppo"]["num_minibatches"]
     assert (b * m) % n == 0
 
@@ -115,3 +116,16 @@ def test_play_record_video(tmp_path, monkeypatch):
   out = tmp_path / "walk.mp4"
   play.record_video(env, _zero_policy(12), "walk", out.as_posix(), seconds=0.2, seed=0, width=16, height=16)
   assert out.exists() and out.stat().st_size > 0
+
+
+def test_fall_penalty_wrapper():
+  import jax
+  import jax.numpy as jp
+
+  env = envs.make_env("walk", {"impl": "jax", "fall_penalty": 3.0})
+  assert isinstance(env, envs.FallPenalty) and env._config.episode_length == 1000  # 屬性會轉給裡面的環境
+  state = env.reset(jax.random.PRNGKey(0))
+  state = state.replace(done=jp.float32(1.0))
+  inner = env.env.step(state, jp.zeros(env.action_size))
+  outer = env.step(state, jp.zeros(env.action_size))
+  assert float(outer.reward) == pytest.approx(float(inner.reward) - 3.0 * float(inner.done))
