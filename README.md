@@ -116,6 +116,7 @@ runs/walk/20261105-200000-first/
 | 改 reward 權重做實驗 | `--set env.reward_config.scales.feet_air_time=0.3 --name airtime03` |
 | 從上次的權重繼續訓練 | `--resume runs/walk/latest` |
 | 先跑小規模確認程式沒壞（CPU 就能跑） | `--smoke` |
+| 顯示 MuJoCo Warp 的「iterations limit reached」警告（預設關閉，否則 log 會有好幾 GB） | `--set solver_warnings=true` |
 
 `runs/walk/latest` 會自動指到最新一次 walk 訓練的最後一個 checkpoint。
 

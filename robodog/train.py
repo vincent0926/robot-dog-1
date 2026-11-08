@@ -97,6 +97,26 @@ def _scale_contact_buffers(cfg: dict, task: str) -> None:
   print(f"[train] 碰撞緩衝區 naconmax：{default.naconmax:,} → {env_cfg['naconmax']:,}（依 {n} 個環境縮小）")
 
 
+def _quiet_solver_warnings(env) -> bool:
+  """關掉 MuJoCo Warp 的「solver / linesearch iterations limit reached」警告。
+
+  Playground 的 Go1 為了速度故意把求解器迭代次數設得很少（iterations=1），
+  所以這個警告幾乎每一步都會出現，log 會變成好幾 GB，但它不代表模擬出錯。
+  其他溢位警告（碰撞緩衝區 naconmax、njmax 不夠等）代表真的有問題，保留不動。
+  回傳是否有修改（impl 不是 warp 時不用處理）。
+  """
+  from mujoco.mjx.third_party.mujoco_warp._src.types import OverflowType
+
+  target = getattr(env, "_ll_env", env)  # 導航環境的物理模型在低階環境裡
+  model = target._mjx_model
+  impl = model.opt._impl
+  if not hasattr(impl, "warn_overflow"):
+    return False
+  mask = int(impl.warn_overflow) & ~int(OverflowType.ITERATIONS | OverflowType.LS_ITERATIONS)
+  target._mjx_model = model.replace(opt=model.opt.replace(_impl=impl.replace(warn_overflow=mask)))
+  return True
+
+
 class StatusFile:
   """把訓練狀態寫到 run 資料夾的 status.json，給監看網站（robodog.monitor）讀。"""
 
@@ -168,6 +188,9 @@ def main(argv=None) -> None:
   env_overrides = cfg.get("env", {}) or {}
   env = envs.make_env(task, env_overrides)
   eval_env = envs.make_env(task, env_overrides)
+  if not cfg.get("solver_warnings", False):
+    if _quiet_solver_warnings(env) and _quiet_solver_warnings(eval_env):
+      print("[train] 已關閉「iterations limit reached」警告（要看請加 --set solver_warnings=true）")
   rand_fn = envs.randomization_fn(task) if cfg.get("domain_randomization", False) else None
 
   ppo_cfg = dict(cfg["ppo"])
