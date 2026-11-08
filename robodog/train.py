@@ -15,6 +15,7 @@ import functools
 import json
 import math
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -117,6 +118,37 @@ def _quiet_solver_warnings(env) -> bool:
   return True
 
 
+class _Tee:
+  """把 print 同時寫到螢幕和 run 資料夾的 train.log，監看網站可以即時顯示。"""
+
+  def __init__(self, stream, path: Path):
+    self.stream = stream
+    self.file = open(path, "a", encoding="utf-8", buffering=1)
+
+  def write(self, text):
+    self.stream.write(text)
+    try:
+      self.file.write(text)
+    except ValueError:  # 檔案已關閉
+      pass
+    return len(text)
+
+  def flush(self):
+    self.stream.flush()
+    try:
+      self.file.flush()
+    except ValueError:
+      pass
+
+  def __getattr__(self, name):
+    return getattr(self.stream, name)
+
+
+def _live_every(ppo_cfg: dict) -> int:
+  """多久回報一次「即時」訓練數據（環境步數）。約整個訓練的 1/200，跟評估無關，網站因此能每十幾秒更新。"""
+  return max(int(ppo_cfg["num_timesteps"]) // 200, 1)
+
+
 class StatusFile:
   """把訓練狀態寫到 run 資料夾的 status.json，給監看網站（robodog.monitor）讀。"""
 
@@ -173,6 +205,8 @@ def main(argv=None) -> None:
   run_dir.mkdir(parents=True, exist_ok=True)
   with open(run_dir / "config.yaml", "w", encoding="utf-8") as f:
     yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
+  sys.stdout = _Tee(sys.stdout, run_dir / "train.log")
+  sys.stderr = _Tee(sys.stderr, run_dir / "train.log")
 
   device = _gpu_summary()
   status = StatusFile(
@@ -197,6 +231,9 @@ def main(argv=None) -> None:
   ppo_cfg.setdefault("episode_length", env._config.episode_length)
   _check_batch(ppo_cfg)
   ppo_kwargs = _ppo_kwargs(ppo_cfg, task)
+  # 兩次評估之間也回報訓練中的回合數據（brax 內建），監看網站才看得到即時進度
+  ppo_kwargs.setdefault("log_training_metrics", True)
+  ppo_kwargs.setdefault("training_metrics_steps", _live_every(ppo_cfg))
 
   # 導航任務：每次回合結束都重新隨機擺場地
   wrap_fn = functools.partial(
@@ -214,7 +251,34 @@ def main(argv=None) -> None:
   t0 = time.time()
   times = [t0]
 
+  last_print = [0.0]
+
+  def live(step: int, metrics: dict) -> None:
+    """訓練中的回合數據（不是評估）：寫進 TensorBoard 和 status.json，每分鐘印一行。"""
+    for k, v in metrics.items():
+      s = _scalar(v)
+      if s is not None and math.isfinite(s):
+        writer.add_scalar(k, s, step)
+    writer.flush()
+    r = _scalar(metrics.get("episode/sum_reward"))
+    sps = _scalar(metrics.get("episode/sps"))
+    elapsed = time.time() - t0
+    status.update(state="running", step=max(int(step), status.data.get("step") or 0),
+                  live_step=int(step), live_reward=r if r is not None and math.isfinite(r) else None,
+                  live_length=_scalar(metrics.get("episode/length")),
+                  sps=sps or status.data.get("sps"), elapsed_min=round(elapsed / 60, 2))
+    if time.time() - last_print[0] > 60:
+      last_print[0] = time.time()
+      msg = f"[live]  step {step:>12,d} | {elapsed/60:6.1f} 分鐘"
+      if r is not None:
+        msg += f" | 訓練回合 reward {r:8.2f}"
+      if sps:
+        msg += f" | {sps:,.0f} steps/s"
+      print(msg, flush=True)
+
   def progress(step: int, metrics: dict) -> None:
+    if any(k.startswith("episode/") for k in metrics):
+      return live(step, metrics)
     times.append(time.time())
     for k, v in metrics.items():
       s = _scalar(v)
@@ -232,7 +296,7 @@ def main(argv=None) -> None:
     if sps:
       msg += f" | {sps:,.0f} steps/s"
     print(msg, flush=True)
-    status.update(state="running", step=int(step), reward=r,
+    status.update(state="running", step=max(int(step), status.data.get("step") or 0), reward=r,
                   sps=sps or status.data.get("sps"), elapsed_min=round(elapsed / 60, 2))
 
   def check_params(step, make_policy, params) -> None:

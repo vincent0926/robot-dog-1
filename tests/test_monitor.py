@@ -39,7 +39,9 @@ def _fake_run(root, name, *, state=None, pid=None, steps=(0, 1000, 2000), video_
 
 
 @pytest.fixture()
-def server(tmp_path):
+def server(tmp_path, monkeypatch):
+  # 假訓練用 pytest 自己的 pid 代表「活著」，這裡不檢查是不是 robodog.train
+  monkeypatch.setattr(monitor, "_is_our_trainer", lambda pid, run: monitor._pid_alive(pid))
   _fake_run(tmp_path, "20260101-000000-alive", state="running", pid=os.getpid())
   _fake_run(tmp_path, "20250101-000000-dead", state="running", pid=999999)
   httpd = ThreadingHTTPServer(("127.0.0.1", 0), monitor.make_handler(tmp_path, monitor.TBCache(), None))
@@ -92,3 +94,42 @@ def test_video_range_and_traversal(server):
 def test_index_served(server):
   code, headers, body = _get(server + "/")
   assert code == 200 and "Robodog 訓練監看".encode() in body
+
+
+def test_system_stats(server):
+  code, _, body = _get(server + "/api/system")
+  d = json.loads(body)
+  assert code == 200 and "gpus" in d and "cores" in d  # 沒有 NVIDIA 顯示卡時 gpus 是空清單
+
+
+def test_log_tail(server, tmp_path):
+  run = tmp_path / "walk" / "20260101-000000-alive"
+  (run / "train.log").write_text("".join(f"line {i}\n" for i in range(500)) + "進度 10%\r進度 50%\n", encoding="utf-8")
+  code, _, body = _get(server + "/api/log?task=walk&name=20260101-000000-alive&lines=3")
+  d = json.loads(body)
+  assert code == 200 and d["lines"] == ["line 498", "line 499", "進度 50%"]  # \r 覆寫的只留最後一段
+  code, _, _ = _get(server + "/api/log?task=walk&name=../../etc")
+  assert code == 404
+
+
+def test_live_series(server, tmp_path):
+  run = tmp_path / "walk" / "20260101-000000-alive"
+  w = SummaryWriter((run / "tb").as_posix())
+  for s in range(0, 4000, 100):
+    w.add_scalar("episode/sum_reward", s / 1000, s)
+  w.close()
+  d = json.loads(_get(server + "/api/run?task=walk&name=20260101-000000-alive")[2])
+  assert len(d["live"]) == 40 and d["live"][-1]["step"] == 3900
+  assert d["live"][-1]["reward"] == pytest.approx(3.9)
+  assert d["live_every"] == 20
+
+
+def test_static_assets(server):
+  assert _get(server + "/manifest.webmanifest")[0] == 200
+  assert _get(server + "/icon.svg")[0] == 200
+
+
+def test_reused_pid_is_not_running(tmp_path):
+  # 自己（pytest）的 pid 活著，但不是 robodog.train → 應判斷為中斷
+  run = _fake_run(tmp_path, "20260101-000000-x", state="running", pid=os.getpid())
+  assert monitor.run_state(run)["state"] == "interrupted"
