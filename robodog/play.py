@@ -24,7 +24,7 @@ import numpy as np
 KEY_RIGHT, KEY_LEFT, KEY_DOWN, KEY_UP = 262, 263, 264, 265
 KEY_COMMA, KEY_PERIOD, KEY_SLASH = 44, 46, 47
 
-CAMERA = {"walk": "track", "getup": "track", "navigate": "overview"}
+CAMERA = {"walk": "track", "rough": "track", "getup": "track", "navigate": "overview"}
 
 
 class Commander:
@@ -64,7 +64,7 @@ def make_stepper(env, policy, task):
 
   @jax.jit
   def step(state, cmd, rng):
-    if task == "walk":
+    if task in ("walk", "rough"):
       state.info["command"] = cmd
       obs = dict(state.obs)
       obs["state"] = obs["state"].at[-3:].set(cmd)
@@ -105,7 +105,7 @@ def interactive(env, policy, task, seed):
   import mujoco.viewer
 
   step, reset = make_stepper(env, policy, task)
-  commander = Commander(env._config.command_config.a if task == "walk" else [0, 0, 0])
+  commander = Commander(env._config.command_config.a if task in ("walk", "rough") else [0, 0, 0])
   model = env.mj_model
   data = mujoco.MjData(model)
 
@@ -120,7 +120,7 @@ def interactive(env, policy, task, seed):
       data.mocap_pos[:] = np.asarray(state.data.mocap_pos)
     mujoco.mj_forward(model, data)
 
-  print("關掉視窗即結束。" + (" 用方向鍵控制，詳見 play.py 說明。" if task == "walk" else ""))
+  print("關掉視窗即結束。" + (" 用方向鍵控制，詳見 play.py 說明。" if task in ("walk", "rough") else ""))
   with mujoco.viewer.launch_passive(model, data, key_callback=commander.key) as viewer:
     if task != "navigate":
       viewer.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING

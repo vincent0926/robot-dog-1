@@ -13,8 +13,10 @@ from robodog.config import update_config_dict
 PLAYGROUND_TASKS = {
     "walk": "Go1JoystickFlatTerrain",
     "getup": "Go1Getup",
+    "rough": "Go1JoystickRoughTerrain",   # 崎嶇地形（高度場），觀測和 walk 一樣，可以直接接續 walk 的策略
 }
-TASKS = ("walk", "getup", "navigate")
+TASKS = ("walk", "getup", "navigate", "rough")
+WALK_LIKE = ("walk", "rough")  # 用搖桿速度指令走路的任務
 
 
 def default_env_config(task: str):

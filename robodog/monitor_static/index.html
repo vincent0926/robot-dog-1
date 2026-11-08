@@ -249,15 +249,17 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 6px 24px; justify-content: s
 
 <script>
 const POLL_MS = 5000, HIDDEN_POLL_MS = 30000;
-const TASKS = ["walk", "getup", "navigate"];
-const TASK = { walk: "行走", getup: "站起", navigate: "導航避障" };
-const VERB = { walk: "走路", getup: "站起來", navigate: "繞過障礙物" };
+const TASKS = ["walk", "rough", "getup", "navigate"];
+const TASK = { walk: "行走", rough: "崎嶇地形", getup: "站起", navigate: "導航避障" };
+const VERB = { walk: "走路", rough: "在崎嶇地形上走", getup: "站起來", navigate: "繞過障礙物" };
+const WALK_LIKE = t => t === "walk" || t === "rough";
 const STATE = { running: "訓練中", starting: "啟動中", done: "完成", failed: "失敗", interrupted: "已中斷", stopped: "已停止" };
 const LABELS = {
   walk: { tracking_lin_vel: "直線速度追蹤", tracking_ang_vel: "轉向追蹤", lin_vel_z: "上下彈跳", ang_vel_xy: "左右搖晃",
     orientation: "機身傾斜", dof_pos_limits: "關節頂到極限", pose: "維持站姿", termination: "跌倒", stand_still: "指令為 0 時站好",
     torques: "力矩", action_rate: "動作抖動", energy: "耗能", feet_clearance: "抬腳高度", feet_height: "腳步高度",
     feet_slip: "腳打滑", feet_air_time: "腳騰空時間" },
+  get rough() { return this.walk; },
   getup: { orientation: "機身朝上", torso_height: "機身高度", posture: "關節姿勢", stand_still: "站穩不動", action_rate: "動作抖動",
     dof_pos_limits: "關節頂到極限", torques: "力矩", dof_acc: "關節加速度", dof_vel: "關節速度" },
   navigate: { progress: "往目標前進", heading: "面向目標", reached: "抵達目標", collision: "碰撞或出界", fall: "跌倒",
@@ -558,7 +560,7 @@ function tiles(d) {
       `<span class="delta ${dl >= 0 ? "up" : "down"}">${dl >= 0 ? "▲" : "▼"} ${Math.abs(dl).toFixed(2)}</span> 比上一次`]);
     if (last.length != null) out.push(["平均存活", Math.round(last.length), "步", `滿分 ${d.episode_length || "—"}，撐滿代表沒跌倒`]);
   }
-  if (d.task === "walk") {
+  if (WALK_LIKE(d.task)) {
     const f = P.filter(p => p.fwd != null).at(-1);
     out.push(["指令 1 m/s 時", f ? f.fwd.toFixed(2) : "—", f ? "m/s" : "", f ? `實際前進速度（${fmt(f.step)} 步的影片）` : "還沒有影片"]);
     const t = comp("termination");
@@ -641,7 +643,7 @@ function comps(d) {
 
 function table(d) {
   if (!d.points.length) return "";
-  const walk = d.task === "walk";
+  const walk = WALK_LIKE(d.task);
   const rows = d.points.slice().reverse().map(p => `<tr data-step="${p.step}" class="${p.step === selStep ? "sel" : ""}">
     <td>${fmt(p.step)}</td><td>${p.reward.toFixed(2)}</td><td>${p.length == null ? "—" : Math.round(p.length)}</td>
     ${walk ? `<td>${p.fwd == null ? "—" : p.fwd.toFixed(2) + " m/s"}</td>` : ""}<td>${p.video ? "播放" : "—"}</td></tr>`).join("");
@@ -695,7 +697,7 @@ function renderDetail() {
     v.play().catch(() => {});
     $("cap").innerHTML = `<b>${fmt(sel.step)} 步</b> 的樣子 · reward ${sel.reward.toFixed(2)}` +
       (sel.fwd != null ? ` · 指令 1 m/s，實際 <b>${sel.fwd.toFixed(2)} m/s</b>` : "") +
-      (sel.falls != null && d.task === "walk" ? ` · 8 秒內跌倒 ${sel.falls} 次` : "");
+      (sel.falls != null && WALK_LIKE(d.task) ? ` · 8 秒內跌倒 ${sel.falls} 次` : "");
   }
   const pick = s => { selStep = s; follow = false; renderDetail(); updateLive(); loadLog(); renderFollow(); };
   document.querySelectorAll(".chip[data-step]").forEach(b => b.onclick = () => pick(+b.dataset.step));

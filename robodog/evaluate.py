@@ -19,6 +19,7 @@ import time
 
 TARGETS = {
     "walk": {"vel_error_mps": ("<", 0.15), "fall_rate": ("<", 0.05)},
+    "rough": {"vel_error_mps": ("<", 0.20), "fall_rate": ("<", 0.05)},  # 地形不平，速度誤差放寬一點
     "getup": {"success_rate": (">=", 0.85)},
     "navigate": {"reach_rate": (">=", 0.80)},
 }
@@ -140,7 +141,7 @@ def main(argv=None) -> None:
   cfg, env, policy, ckpt = load_run(args.run, impl=args.impl)
   task = cfg["task"]
   rng = jax.random.PRNGKey(args.seed)
-  fn = {"walk": eval_walk, "getup": eval_getup, "navigate": eval_navigate}[task]
+  fn = {"walk": eval_walk, "rough": eval_walk, "getup": eval_getup, "navigate": eval_navigate}[task]
   result = fn(env, policy, args.episodes, rng)
   verdict = check_targets(task, result)
 

@@ -30,7 +30,7 @@ def test_deep_merge_and_set():
 
 
 def test_all_configs_load_and_match_env_fields():
-  for name in ("walk", "getup", "navigate"):
+  for name in ("walk", "getup", "navigate", "rough"):
     cfg = rcfg.load_config(f"configs/{name}.yaml")
     env_cfg = envs.default_env_config(cfg["task"])
     rcfg.update_config_dict(env_cfg, cfg["env"])  # 欄位打錯字會在這裡報錯
