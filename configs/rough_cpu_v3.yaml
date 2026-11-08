@@ -1,0 +1,56 @@
+# CPU 版崎嶇地形第三階段：真正的跌倒懲罰。從 rough_cpu_v2.yaml 練完的 checkpoint 接著練。
+#   python -m robodog.train configs/rough_cpu_v3.yaml --resume runs/rough/<第二階段的 run>
+#
+# 第二階段結果：跌倒率 10.2%（推擠）/ 8.6%（不推擠），還沒達到 5%。
+# 分析 512 回合：|vx| < 0.5 只跌 1.6%，|vx| 1.0~1.5 跌 23.4%；轉向小（直衝）跌 23.3%，轉向大只跌 1.5%。
+# → 跌倒集中在「崎嶇地形上高速直衝」。加上 fall_penalty：在 reward 截斷之後再扣分，跌倒一次扣 3 分
+#   （約等於 70 步的正常得分），讓策略在高速時學會穩一點。
+#
+# ---- 以下是第二階段的說明 ----
+# 第一階段結果（1500 萬步）：速度誤差 0.080 通過，但跌倒率 11.7%（不推擠也有 13.3%，所以是地形絆倒）。
+# 原因：Playground 每一步的總 reward 會被截到 >= 0，跌倒懲罰（termination）幾乎沒作用，
+#      跌倒的代價只有「之後拿不到分數」；discounting 0.97 只看約 0.66 秒後，所以策略不夠怕跌倒。
+# 調整：discounting 0.97 → 0.99（看約 2 秒後）、feet_clearance -0.5 → -2.0（Playground 預設，腳抬高一點才不會絆到）。
+task: rough
+seed: 4
+domain_randomization: false
+
+env:
+  impl: jax
+  fall_penalty: 3.0           # 跌倒一次直接扣 3 分（在 Playground 的 >= 0 截斷之後扣）
+  command_config:
+    a: [1.5, 0.8, 1.2]
+  pert_config:
+    enable: true
+    velocity_kick: [0.0, 1.5]   # CPU 版先推輕一點
+  reward_config:
+    scales:                   # 和 walk_cpu.yaml 相同
+      tracking_lin_vel: 2.0
+      tracking_ang_vel: 1.0
+      pose: 0.1
+      feet_air_time: 0.5
+      feet_clearance: -2.0
+      energy: -0.0005
+
+ppo:
+  num_timesteps: 15000000
+  num_evals: 10
+  num_envs: 256
+  num_eval_envs: 64
+  batch_size: 256
+  num_minibatches: 8
+  num_updates_per_batch: 4
+  unroll_length: 20
+  learning_rate: 0.00015      # 接續訓練，學習率小一點，避免把已學會的忘掉
+  entropy_cost: 0.005
+  discounting: 0.99
+  reward_scaling: 1.0
+  max_grad_norm: 1.0
+  normalize_observations: true
+  num_resets_per_eval: 0
+  action_repeat: 1
+  network:
+    policy_hidden_layer_sizes: [512, 256, 128]
+    value_hidden_layer_sizes: [512, 256, 128]
+    policy_obs_key: state
+    value_obs_key: privileged_state

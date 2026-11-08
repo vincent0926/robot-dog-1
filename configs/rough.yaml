@@ -8,6 +8,7 @@ domain_randomization: true   # 隨機摩擦力、質量、重心
 
 env:
   impl: warp
+  fall_penalty: 3.0           # 跌倒直接扣分（Playground 會把每步 reward 截到 >= 0，原本的跌倒懲罰幾乎無效）
   episode_length: 1000        # 20 秒
   command_config:
     a: [1.5, 0.8, 1.2]        # 和 walk 相同：前後 1.5 m/s、左右 0.8 m/s、轉向 1.2 rad/s
@@ -22,7 +23,7 @@ env:
       tracking_ang_vel: 1.0
       pose: 0.1
       feet_air_time: 0.5
-      feet_clearance: -0.5
+      feet_clearance: -2.0    # 抬腳夠高才不會被地形絆倒
       energy: -0.0005
 
 ppo:
@@ -35,7 +36,7 @@ ppo:
   unroll_length: 20
   learning_rate: 0.0003
   entropy_cost: 0.01
-  discounting: 0.97
+  discounting: 0.99           # 看遠一點（約 2 秒），比較會避免跌倒
   reward_scaling: 1.0
   max_grad_norm: 1.0
   normalize_observations: true

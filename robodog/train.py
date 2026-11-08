@@ -108,6 +108,7 @@ def _quiet_solver_warnings(env) -> bool:
   """
   from mujoco.mjx.third_party.mujoco_warp._src.types import OverflowType
 
+  env = env.unwrapped  # 外面可能包了 FallPenalty，要改的是最裡面那個環境
   target = getattr(env, "_ll_env", env)  # 導航環境的物理模型在低階環境裡
   model = target._mjx_model
   impl = model.opt._impl
