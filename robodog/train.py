@@ -78,6 +78,25 @@ def _scalar(v):
     return None
 
 
+def _scale_contact_buffers(cfg: dict, task: str) -> None:
+  """Playground 預設的碰撞緩衝區（naconmax）是照 8192 個環境配置的，環境變少時跟著縮小，省顯示卡記憶體。
+
+  YAML 裡自己寫了 env.naconmax 就不動。
+  """
+  from robodog import envs
+
+  env_cfg = cfg["env"]
+  if "naconmax" in env_cfg:
+    return
+  default = envs.default_env_config(task)
+  if "naconmax" not in default:
+    return
+  per_env = default.naconmax / 8192
+  n = max(int(cfg["ppo"]["num_envs"]), int(cfg["ppo"].get("num_eval_envs", 128)))
+  env_cfg["naconmax"] = int(per_env * n * 1.25) + 1024  # 多留 25% 餘裕
+  print(f"[train] 碰撞緩衝區 naconmax：{default.naconmax:,} → {env_cfg['naconmax']:,}（依 {n} 個環境縮小）")
+
+
 class StatusFile:
   """把訓練狀態寫到 run 資料夾的 status.json，給監看網站（robodog.monitor）讀。"""
 
@@ -108,6 +127,14 @@ def main(argv=None) -> None:
     llp = (cfg.get("env") or {}).get("low_level_policy", "runs/walk/latest")
     if llp.startswith("runs/"):
       cfg.setdefault("env", {})["low_level_policy"] = "runs_smoke/" + llp[len("runs/"):]
+
+  env_cfg = cfg.setdefault("env", {}) or {}
+  cfg["env"] = env_cfg
+  if env_cfg.get("impl", "warp") == "warp":
+    # MuJoCo Warp 的碰撞緩衝區是 JAX 記憶體池以外另外配置的。
+    # JAX 預設一開始就佔走 75% 顯示卡記憶體，8GB 的卡會讓 Warp 不夠用，所以先讓出一半。
+    os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.5")
+    _scale_contact_buffers(cfg, task)
 
   import jax
   from brax.training.agents.ppo import train as ppo
