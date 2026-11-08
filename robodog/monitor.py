@@ -6,7 +6,8 @@
   python -m robodog.monitor --no-video      # 不自動錄影
 
 它會：
-  - 每 10 秒讀一次 runs/ 底下所有訓練（TensorBoard 紀錄、status.json、checkpoint）
+  - 每 5 秒讀一次 runs/ 底下所有訓練（TensorBoard 紀錄、status.json、checkpoint）
+  - 訓練中每十幾秒就有即時數據（不用等評估），還有訓練紀錄（train.log）和電腦狀態（顯示卡、CPU、記憶體）
   - 有新的 checkpoint 就在背景用 CPU 錄一段 8 秒影片（不搶訓練用的顯示卡）
   - 訓練完成後自動跑一次正式評估（evaluate），結果顯示在網頁上
 
@@ -92,10 +93,27 @@ class TBCache:
     return out
 
 
+def _is_our_trainer(pid, run: Path) -> bool:
+  """pid 還活著，而且真的是這次訓練的 robodog.train。
+
+  雲端或電腦重開機後 pid 會被別的程式重複使用，只看 pid 會把早就中斷的訓練誤判成「訓練中」。
+  """
+  if not _pid_alive(pid):
+    return False
+  try:
+    cmd = Path(f"/proc/{int(pid)}/cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
+  except OSError:
+    return True  # 沒有 /proc（例如 macOS）就只能相信 pid
+  if "robodog.train" not in cmd:
+    return False
+  name = run.name.split("-", 2)[2] if run.name.count("-") >= 2 else ""
+  return not name or name in cmd
+
+
 def run_state(run: Path) -> dict:
   st = _read_json(run / "status.json") or {}
   state = st.get("state")
-  if state in ("running", "starting") and not _pid_alive(st.get("pid")):
+  if state in ("running", "starting") and not _is_our_trainer(st.get("pid"), run):
     state = "interrupted"  # 程式被關掉或當機，沒機會寫 status
   if state is None:  # 舊版訓練沒有 status.json
     state = "done" if (run / "summary.json").exists() else "interrupted"
@@ -118,8 +136,20 @@ def run_summary(run: Path, tb: TBCache) -> dict:
       "step": last_step,
       "total_steps": total,
       "reward": rewards[-1][1] if rewards else None,
+      "live_reward": st.get("live_reward"),
+      "eval_passed": (_read_json(run / "eval.json") or {}).get("passed"),
+      "sps": st.get("sps"),
+      "device": st.get("device"),
       "updated": st.get("updated") or (run / "config.yaml").stat().st_mtime,
   }
+
+
+def _downsample(series: list, n: int) -> list:
+  if len(series) <= n:
+    return series
+  stride = len(series) / n
+  out = [series[int(i * stride)] for i in range(n)]
+  return out[:-1] + [series[-1]]  # 一定保留最新一點
 
 
 def run_detail(run: Path, tb: TBCache, jobs: "Worker | None") -> dict:
@@ -168,10 +198,15 @@ def run_detail(run: Path, tb: TBCache, jobs: "Worker | None") -> dict:
   if st["state"] == "running" and sps and total > last_step:
     eta_min = (total - last_step) / sps / 60
 
+  live = _downsample(sc.get("episode/sum_reward", []), 300)
+  live_len = dict(sc.get("episode/length", []))
+
   return {
       "task": cfg.get("task", run.parent.name),
       "name": run.name,
       "status": st,
+      "live": [{"step": s_, "reward": v, "length": live_len.get(s_)} for s_, v in live],
+      "live_every": max(total // 200, 1) if total else None,
       "step": last_step,
       "total_steps": total,
       "sps": sps,
@@ -186,6 +221,105 @@ def run_detail(run: Path, tb: TBCache, jobs: "Worker | None") -> dict:
       "job": jobs.job_for(run) if jobs else None,
       "video_error": jobs.video_error if jobs else None,
   }
+
+
+class SystemStats:
+  """電腦的即時狀態：顯示卡（nvidia-smi）、CPU、記憶體、硬碟。結果快取 3 秒，很多人同時看也不會變慢。"""
+
+  def __init__(self, root: Path):
+    self.root = root
+    self._lock = threading.Lock()
+    self._cache = (0.0, None)
+    self._cpu_prev = None
+    self._has_smi = None
+
+  def get(self) -> dict:
+    with self._lock:
+      t, data = self._cache
+      if data is not None and time.time() - t < 3:
+        return data
+      data = {"cpu": self._cpu(), "mem": self._mem(), "disk": self._disk(), "gpus": self._gpus(),
+              "cores": os.cpu_count(), "time": time.time()}
+      self._cache = (time.time(), data)
+      return data
+
+  def _cpu(self):
+    try:
+      with open("/proc/stat") as f:
+        vals = [int(x) for x in f.readline().split()[1:]]
+    except OSError:
+      return None
+    idle, total = vals[3] + (vals[4] if len(vals) > 4 else 0), sum(vals)
+    prev, self._cpu_prev = self._cpu_prev, (idle, total)
+    if prev and total > prev[1]:
+      return round(100 * (1 - (idle - prev[0]) / (total - prev[1])), 1)
+    try:
+      return round(min(100.0, os.getloadavg()[0] / (os.cpu_count() or 1) * 100), 1)
+    except OSError:
+      return None
+
+  @staticmethod
+  def _mem():
+    try:
+      info = {}
+      with open("/proc/meminfo") as f:
+        for line in f:
+          k, v = line.split(":", 1)
+          info[k] = int(v.split()[0]) * 1024
+      return {"used": info["MemTotal"] - info["MemAvailable"], "total": info["MemTotal"]}
+    except (OSError, KeyError, ValueError):
+      return None
+
+  def _disk(self):
+    try:
+      st = os.statvfs(self.root)
+      return {"free": st.f_bavail * st.f_frsize, "total": st.f_blocks * st.f_frsize}
+    except OSError:
+      return None
+
+  def _gpus(self):
+    if self._has_smi is False:
+      return []
+    q = "name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw"
+    try:
+      out = subprocess.run(["nvidia-smi", f"--query-gpu={q}", "--format=csv,noheader,nounits"],
+                           capture_output=True, text=True, timeout=3)
+    except (OSError, subprocess.TimeoutExpired):
+      self._has_smi = False
+      return []
+    if out.returncode != 0:
+      return []
+    self._has_smi = True
+
+    def num(x):
+      try:
+        return float(x)
+      except ValueError:
+        return None  # [N/A]
+
+    gpus = []
+    for line in out.stdout.strip().splitlines():
+      f = [x.strip() for x in line.split(",")]
+      if len(f) >= 6:
+        gpus.append({"name": f[0], "util": num(f[1]), "mem_used": num(f[2]), "mem_total": num(f[3]),
+                     "temp": num(f[4]), "power": num(f[5])})
+    return gpus
+
+
+def tail_log(run: Path, lines: int = 200) -> dict:
+  f = run / "train.log"
+  if not f.is_file():
+    return {"lines": [], "size": 0}
+  size = f.stat().st_size
+  with open(f, "rb") as fh:
+    fh.seek(max(0, size - 64 * 1024))
+    text = fh.read().decode("utf-8", "replace")
+  # jax/absl 的進度訊息常用 \r 覆寫同一行，只留最後一段
+  # 不用 splitlines()：它把 \r 也當換行
+  out = [ln.rstrip("\r").rsplit("\r", 1)[-1] for ln in text.rstrip("\n").split("\n")]
+  if size > 64 * 1024:
+    out = out[1:]  # 第一行可能被切一半
+  return {"lines": out[-lines:], "size": size}
 
 
 def list_runs(root: Path) -> list[Path]:
@@ -301,8 +435,9 @@ class Worker(threading.Thread):
 # HTTP
 # --------------------------------------------------------------------------- #
 
-def make_handler(root: Path, tb: TBCache, worker: Worker | None):
+def make_handler(root: Path, tb: TBCache, worker: "Worker | None", system: SystemStats | None = None):
   root = root.resolve()
+  system = system or SystemStats(root)
 
   class Handler(BaseHTTPRequestHandler):
     server_version = "robodog-monitor"
@@ -359,6 +494,22 @@ def make_handler(root: Path, tb: TBCache, worker: Worker | None):
           if run is None:
             return self._json({"error": "找不到這次訓練"}, 404)
           return self._json(run_detail(run, tb, worker))
+        if path == "/api/system":
+          return self._json(system.get())
+        if path == "/api/log":
+          q = parse_qs(url.query)
+          run = self._run_dir(q.get("task", [""])[0], q.get("name", [""])[0])
+          if run is None:
+            return self._json({"error": "找不到這次訓練"}, 404)
+          try:
+            n = max(1, min(int(q.get("lines", ["200"])[0]), 1000))
+          except ValueError:
+            n = 200
+          return self._json(tail_log(run, n))
+        if path in ("/manifest.webmanifest", "/icon.svg"):
+          f = STATIC_DIR / path.lstrip("/")
+          ctype = "application/manifest+json" if f.suffix == ".webmanifest" else "image/svg+xml"
+          return self._send(200, f.read_bytes(), ctype)
         if path.startswith("/media/"):
           parts = path.split("/")  # /media/<task>/<name>/<file>
           if len(parts) != 5:
