@@ -132,20 +132,23 @@ def main(argv=None) -> None:
   p.add_argument("--episodes", type=int, default=256, help="同時評估幾個回合")
   p.add_argument("--impl", default=None, help="覆寫物理引擎實作：warp 或 jax")
   p.add_argument("--seed", type=int, default=1)
+  p.add_argument("--no-push", action="store_true",
+                 help="評估時關掉隨機推擠（rough 任務用來區分「地形造成的跌倒」和「被推倒」），結果存到 eval_nopush.json")
   p.add_argument("--json", default=None, help="結果另存的 JSON 路徑（預設存到該次訓練資料夾的 eval.json）")
   args = p.parse_args(argv)
 
   import jax
   from robodog.policy_io import load_run
 
-  cfg, env, policy, ckpt = load_run(args.run, impl=args.impl)
+  env_sets = {"pert_config": {"enable": False}} if args.no_push else None
+  cfg, env, policy, ckpt = load_run(args.run, impl=args.impl, env_sets=env_sets)
   task = cfg["task"]
   rng = jax.random.PRNGKey(args.seed)
   fn = {"walk": eval_walk, "rough": eval_walk, "getup": eval_getup, "navigate": eval_navigate}[task]
   result = fn(env, policy, args.episodes, rng)
   verdict = check_targets(task, result)
 
-  print(f"\n=== 評估結果：{task}（{args.episodes} 回合）===")
+  print(f"\n=== 評估結果：{task}（{args.episodes} 回合{'，不推擠' if args.no_push else ''}）===")
   print(f"checkpoint：{ckpt}")
   for k, v in result.items():
     mark = ""
@@ -154,10 +157,10 @@ def main(argv=None) -> None:
       mark = f"   目標 {op} {target}  {'✅ 通過' if verdict[k] else '❌ 未達標'}"
     print(f"  {k:16s} {v:8.4f}{mark}")
 
-  out = args.json or (ckpt.parent.parent / "eval.json")
+  out = args.json or (ckpt.parent.parent / ("eval_nopush.json" if args.no_push else "eval.json"))
   with open(out, "w", encoding="utf-8") as f:
     json.dump({"task": task, "checkpoint": str(ckpt), "step": int(ckpt.name),
-               "episodes": args.episodes, **result,
+               "episodes": args.episodes, "push": not args.no_push, **result,
                "targets": {k: list(v) for k, v in TARGETS.get(task, {}).items()},
                "verdict": verdict, "passed": all(verdict.values()), "time": time.time()},
               f, ensure_ascii=False, indent=2)
