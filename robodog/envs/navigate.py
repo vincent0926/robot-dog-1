@@ -70,6 +70,11 @@ class _LowLevelJoystick(go1_joystick.Joystick):
   """Go1 Joystick 環境，但換成有障礙物的導航場景 XML。"""
 
   def __init__(self, config: config_dict.ConfigDict):
+    # Go1 的 mesh（hip.stl 等）在 mujoco_menagerie 裡，Playground 第一次用到時才會下載。
+    # registry.load() 會先呼叫 ensure_menagerie_exists()，但這裡是直接建 Go1Env，
+    # 不自己確認的話，在 menagerie 還沒下載的電腦上就會找不到 mesh 檔
+    # （之前完整跑 pytest 時，要等後面的 walk 測試觸發下載，順序在前的導航測試就會失敗）。
+    mjx_env.ensure_menagerie_exists()
     go1_base.Go1Env.__init__(self, xml_path=NAV_XML.as_posix(), config=config)
     self._post_init()
 
