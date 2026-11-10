@@ -30,10 +30,10 @@ def test_deep_merge_and_set():
 
 
 def test_all_configs_load_and_match_env_fields():
-  for name in ("walk", "getup", "navigate", "rough"):
+  for name in ("walk", "getup", "navigate", "rough", "walk_gait_cpu"):
     cfg = rcfg.load_config(f"configs/{name}.yaml")
     env_cfg = envs.default_env_config(cfg["task"])
-    env_over = {k: v for k, v in cfg["env"].items() if k != "fall_penalty"}  # fall_penalty 是我們自己加的欄位
+    env_over = {k: v for k, v in cfg["env"].items() if k not in ("fall_penalty", "gait")}  # 這兩個是我們自己加的欄位
     rcfg.update_config_dict(env_cfg, env_over)  # 欄位打錯字會在這裡報錯
     n, b, m = cfg["ppo"]["num_envs"], cfg["ppo"]["batch_size"], cfg["ppo"]["num_minibatches"]
     assert (b * m) % n == 0
@@ -129,3 +129,52 @@ def test_fall_penalty_wrapper():
   inner = env.env.step(state, jp.zeros(env.action_size))
   outer = env.step(state, jp.zeros(env.action_size))
   assert float(outer.reward) == pytest.approx(float(inner.reward) - 3.0 * float(inner.done))
+
+
+def test_gait_shaping_rewards_trot_and_penalizes_flight():
+  import jax
+  import jax.numpy as jp
+
+  env = envs.make_env("walk", {"impl": "jax", "gait": {"trot": 1.0, "flight": 2.0, "short_swing": 0.5, "swing_time": 0.2}})
+  assert isinstance(env, envs.GaitShaping)
+  state = env.reset(jax.random.PRNGKey(0))
+  assert "reward/gait_trot" in state.metrics
+  dt = float(env.dt)
+
+  def bonus(contact, prev_air, cmd=(1.0, 0.0, 0.0)):
+    """不跑物理，直接假造裡面環境回傳的著地訊號，只測步態項。"""
+    inner = env.env
+
+    class Fake:
+      dt = inner.dt
+
+      def step(self, s, a):
+        info = {**s.info, "last_contact": jp.array(contact, dtype=bool), "command": jp.array(cmd)}
+        return s.replace(info=info, reward=jp.zeros(()), done=jp.zeros(()))
+
+    env.env = Fake()
+    try:
+      s = state.replace(info={**state.info, "feet_air_time": jp.array(prev_air)})
+      out = env.step(s, jp.zeros(12))
+    finally:
+      env.env = inner
+    return float(out.reward), {k: float(v) for k, v in out.metrics.items() if k.startswith("reward/gait_")}
+
+  zeros = [0.0] * 4
+  # 完美對角：FR+RL 著地、FL+RR 離地 → trot 滿分
+  r, m = bonus([1, 0, 0, 1], zeros)
+  assert r == pytest.approx(1.0 * dt) and m["reward/gait_flight"] == 0.0
+  # 同側（溜步 pace）：FR+RR 著地 → 對角不同步，只有「兩組相反」那一半的分數
+  assert bonus([1, 0, 1, 0], zeros)[0] == pytest.approx(0.5 * dt)
+  # 四腳騰空：trot 一半分數，再扣 flight
+  assert bonus([0, 0, 0, 0], zeros)[0] == pytest.approx(0.5 * dt - 2.0 * dt)
+  # 碎步：FR 只騰空 0.04 秒就落地（加上這一步共 0.06 秒）→ 扣 0.5 × (0.2 - 0.06)
+  r, m = bonus([1, 0, 0, 1], [0.04, 0.0, 0.0, 0.0])
+  assert m["reward/gait_short_swing"] == pytest.approx(-0.5 * (0.2 - 0.04 - dt), abs=1e-6)
+  # 沒有移動指令時不計算步態
+  assert bonus([0, 0, 0, 0], zeros, cmd=(0.0, 0.0, 0.0))[0] == 0.0
+
+  with pytest.raises(KeyError):
+    envs.make_env("walk", {"impl": "jax", "gait": {"trott": 1.0}})
+  with pytest.raises(ValueError):
+    envs.make_env("getup", {"impl": "jax", "gait": {}})
