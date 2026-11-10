@@ -163,6 +163,22 @@ networkingMode=mirrored
 
 想在外面（不同網路）也能看，可以在電腦和手機都安裝 Tailscale，再用 Tailscale 給的 IP 連線。
 
+### 固定網址（GitHub Pages）
+
+不想每次都先啟動電腦上的監看程式，可以把訓練結果發佈成一個固定的網址：
+
+```bash
+python -m robodog.publish
+```
+
+會把 `runs/` 匯出成靜態網頁（影片、曲線、評估結果都在，只是沒有「即時」的部分），推到這個 repo 的 `gh-pages` 分支。網址是 `https://<帳號>.github.io/<repo 名>/`。
+
+- **第一次**要到 GitHub 的 Settings → Pages，Source 選「Deploy from a branch」，Branch 選 `gh-pages`、資料夾選 `/ (root)`。
+- 不同電腦可以各自發佈：網站上已經有的訓練會保留，只更新這台電腦有的。最多保留最新 30 個（`--keep` 可以改）。
+- 這個 repo 是公開的，所以網站和影片任何人都看得到。
+- 推送需要你的 GitHub 登入權限。如果跳出要密碼，GitHub 已經不收密碼了，請改用 `gh auth login` 或 Personal Access Token。
+- 想先檢查內容、不推送：`python -m robodog.publish --dry-run`。
+
 ### 看訓練曲線（TensorBoard）
 
 另開一個 Ubuntu 視窗：
@@ -245,7 +261,9 @@ robodog/
   evaluate.py       依 PRD 的驗收標準評估
   play.py           3D 視窗 / 錄影
   progress_video.py 每個 checkpoint 錄一段影片，看訓練過程
-  monitor.py        監看網站（python -m robodog.monitor）
+  monitor.py        監看網站（python -m robodog.monitor），也能匯出成靜態網站（--export）
+  publish.py        發佈到 GitHub Pages（python -m robodog.publish）
+  gait.py           量走路姿勢（python -m robodog.gait）
   monitor_static/   監看網站的網頁
   config.py         YAML 讀取與 --set 覆寫
   policy_io.py      找 checkpoint、載入策略

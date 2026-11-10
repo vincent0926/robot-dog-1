@@ -133,3 +133,37 @@ def test_reused_pid_is_not_running(tmp_path):
   # 自己（pytest）的 pid 活著，但不是 robodog.train → 應判斷為中斷
   run = _fake_run(tmp_path, "20260101-000000-x", state="running", pid=os.getpid())
   assert monitor.run_state(run)["state"] == "interrupted"
+
+
+def test_export_static_merges_and_prunes(tmp_path):
+  runs = tmp_path / "runs"
+  out = tmp_path / "site"
+  _fake_run(runs, "20260101-000000-a", state="done", pid=None)
+  assert monitor.export_static(runs, out) == ["walk/20260101-000000-a"]
+  d = json.loads((out / "api" / "run" / "walk" / "20260101-000000-a.json").read_text(encoding="utf-8"))
+  assert d["exported"] > 0 and d["summary"]["name"] == "20260101-000000-a"
+  assert (out / "media" / "walk" / "20260101-000000-a" / "step_000000001000.mp4").is_file()
+  html = (out / "index.html").read_text(encoding="utf-8")
+  assert "window.STATIC_MODE = true" in html and 'href="manifest.webmanifest"' in html and (out / ".nojekyll").exists()
+
+  # 另一台電腦匯出另一個訓練到同一個資料夾：兩個都要在
+  other = tmp_path / "runs2"
+  _fake_run(other, "20260201-000000-b", state="done", pid=None)
+  monitor.export_static(other, out)
+  names = [r["name"] for r in json.loads((out / "api" / "runs.json").read_text(encoding="utf-8"))["runs"]]
+  assert names == ["20260201-000000-b", "20260101-000000-a"]  # 新的在前
+
+  # 只留最新的 keep 個：舊的連影片一起刪掉
+  monitor.export_static(other, out, keep=1)
+  names = [r["name"] for r in json.loads((out / "api" / "runs.json").read_text(encoding="utf-8"))["runs"]]
+  assert names == ["20260201-000000-b"]
+  assert not (out / "media" / "walk" / "20260101-000000-a").exists()
+  assert not (out / "api" / "run" / "walk" / "20260101-000000-a.json").exists()
+
+
+def test_publish_pages_url():
+  from robodog import publish
+
+  assert publish.pages_url("https://github.com/vincent0926/robot-dog-1.git") == "https://vincent0926.github.io/robot-dog-1/"
+  assert publish.pages_url("git@github.com:vincent0926/robot-dog-1.git") == "https://vincent0926.github.io/robot-dog-1/"
+  assert publish.pages_url("/some/local/path") is None

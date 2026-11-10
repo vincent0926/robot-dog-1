@@ -553,6 +553,74 @@ def make_handler(root: Path, tb: TBCache, worker: "Worker | None", system: Syste
   return Handler
 
 
+def _write_json(path: Path, obj) -> None:
+  path.parent.mkdir(parents=True, exist_ok=True)
+  path.write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
+
+
+def export_static(root: Path, out: Path, keep: int = 30) -> list[str]:
+  """把 runs/ 匯出成可以放到 GitHub Pages 的靜態網站（沒有後端，只有 json 和影片）。
+
+  - out 裡已經有的訓練會保留（所以能從不同電腦分次匯出，例如雲端和你的 5060 電腦各匯一次）；
+    同一個訓練再匯出一次就是更新它。
+  - 只留名字（＝時間）最新的 keep 個訓練，舊的刪掉，避免網站越來越大。
+  回傳這次寫入的訓練名稱。
+  """
+  import shutil
+
+  root, out = root.resolve(), out.resolve()
+  tb = TBCache()
+  now = time.time()
+  wrote = []
+  for run in list_runs(root):
+    try:
+      detail = run_detail(run, tb, None)
+      summary = run_summary(run, tb)
+    except Exception as e:  # noqa: BLE001  壞掉的訓練跳過
+      print(f"[export] 跳過 {run.parent.name}/{run.name}：{type(e).__name__}: {e}")
+      continue
+    task, name = detail["task"], run.name
+    detail["exported"] = summary["exported"] = now
+    detail["summary"] = summary
+    _write_json(out / "api" / "run" / task / f"{name}.json", detail)
+    _write_json(out / "api" / "log" / task / f"{name}.json", tail_log(run, 200))
+    # 影片：只複製網頁真的會用到的（每個 checkpoint 一段）
+    dest = out / "media" / task / name
+    for p in detail["points"]:
+      v = p.get("video")
+      src = run / "videos" / v if v else None
+      if src and src.is_file() and not (dest / v).exists():
+        dest.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest / v)
+    wrote.append(f"{task}/{name}")
+
+  # 只留最新的 keep 個（名字開頭是時間，字串排序就是時間排序）
+  all_runs = sorted(((f.parent.name, f.stem) for f in (out / "api" / "run").glob("*/*.json")), key=lambda t: t[1], reverse=True)
+  for task, name in all_runs[keep:]:
+    for d in ((out / "api" / "run" / task / f"{name}.json"), (out / "api" / "log" / task / f"{name}.json")):
+      d.unlink(missing_ok=True)
+    shutil.rmtree(out / "media" / task / name, ignore_errors=True)
+  summaries = []
+  for task, name in all_runs[:keep]:
+    d = _read_json(out / "api" / "run" / task / f"{name}.json")
+    if d and d.get("summary"):
+      summaries.append(d["summary"])
+  _write_json(out / "api" / "runs.json", {"runs": summaries, "errors": [], "root": "", "now": now, "job": None})
+
+  # 網頁本身：在最前面加上「靜態模式」標記，並把網址改成相對路徑（GitHub Pages 會放在 /robot-dog-1/ 底下）
+  html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+  html = html.replace('href="/manifest.webmanifest"', 'href="manifest.webmanifest"').replace('href="/icon.svg"', 'href="icon.svg"')
+  html = html.replace('icon: "/icon.svg"', 'icon: "icon.svg"')
+  html = html.replace("<script>\n", "<script>\nwindow.STATIC_MODE = true;\n", 1)  # 網頁裡只有一個 <script>
+  assert "window.STATIC_MODE = true" in html, "index.html 的結構變了，找不到要注入的位置"
+  (out / "index.html").write_text(html, encoding="utf-8")
+  (out / "icon.svg").write_bytes((STATIC_DIR / "icon.svg").read_bytes())
+  manifest = (STATIC_DIR / "manifest.webmanifest").read_text(encoding="utf-8").replace('"/"', '"./"').replace('"/icon.svg"', '"icon.svg"')
+  (out / "manifest.webmanifest").write_text(manifest, encoding="utf-8")
+  (out / ".nojekyll").write_text("", encoding="utf-8")  # 告訴 GitHub Pages 不要用 Jekyll 處理，檔名才不會被改掉
+  return wrote
+
+
 def _lan_ip() -> str | None:
   try:
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
@@ -570,7 +638,14 @@ def main(argv=None) -> None:
   p.add_argument("--no-video", action="store_true", help="不要自動錄影")
   p.add_argument("--no-eval", action="store_true", help="訓練完成後不要自動評估")
   p.add_argument("--eval-episodes", type=int, default=128)
+  p.add_argument("--export", metavar="資料夾", default=None, help="不開網站，改成匯出靜態網站到這個資料夾（要發佈到 GitHub 請用 python -m robodog.publish）")
+  p.add_argument("--keep", type=int, default=30, help="--export 時最多保留幾個訓練")
   args = p.parse_args(argv)
+
+  if args.export:
+    wrote = export_static(Path(args.runs), Path(args.export), keep=args.keep)
+    print(f"[export] 已匯出 {len(wrote)} 個訓練到 {args.export}")
+    return
 
   root = Path(args.runs).resolve()
   root.mkdir(parents=True, exist_ok=True)

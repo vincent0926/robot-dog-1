@@ -60,7 +60,14 @@ a:hover { text-decoration: underline; }
 .tab:disabled { opacity: .35; cursor: default; }
 .conn { font-size: 12px; color: var(--muted); white-space: nowrap; }
 .conn.bad { color: var(--bad); }
-@media (max-width: 640px) { .tabs { gap: 16px; justify-content: flex-end; } .conn { display: none; } }
+.tab { white-space: nowrap; }
+@media (max-width: 640px) {
+  .gnav .wrap { gap: 12px; }
+  .brand { font-size: 15px; }
+  .tabs { gap: 14px; justify-content: flex-end; overflow-x: auto; scrollbar-width: none; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .conn, .bell { display: none; }
+}
 
 /* ---- 本地導覽列 ---- */
 .lnav { position: sticky; top: calc(44px + env(safe-area-inset-top, 0px)); z-index: 19; background: var(--nav-bg);
@@ -248,7 +255,19 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 6px 24px; justify-content: s
 <footer><div class="wrap wide"><span>Robodog 訓練監看 · 每 5 秒自動更新</span><span id="foot"></span></div></footer>
 
 <script>
-const POLL_MS = 5000, HIDDEN_POLL_MS = 30000;
+// 靜態快照模式：網頁匯出到 GitHub Pages 之後，沒有後端，改讀 api/*.json（匯出時會在頁面最前面加上 window.STATIC_MODE）
+const STATIC = !!window.STATIC_MODE;
+const enc = encodeURIComponent;
+const api = STATIC ? {
+  runs: () => "api/runs.json", system: () => null,
+  run: (t, n) => `api/run/${enc(t)}/${enc(n)}.json`, log: (t, n) => `api/log/${enc(t)}/${enc(n)}.json`,
+  media: (t, n, f) => `media/${enc(t)}/${enc(n)}/${enc(f)}`,
+} : {
+  runs: () => "/api/runs", system: () => "/api/system",
+  run: (t, n) => `/api/run?task=${enc(t)}&name=${enc(n)}`, log: (t, n) => `/api/log?task=${enc(t)}&name=${enc(n)}&lines=200`,
+  media: (t, n, f) => `/media/${enc(t)}/${enc(n)}/${enc(f)}`,
+};
+const POLL_MS = STATIC ? 60000 : 5000, HIDDEN_POLL_MS = STATIC ? 120000 : 30000;
 const TASKS = ["walk", "rough", "getup", "navigate"];
 const TASK = { walk: "行走", rough: "崎嶇地形", getup: "站起", navigate: "導航避障" };
 const VERB = { walk: "走路", rough: "在崎嶇地形上走", getup: "站起來", navigate: "繞過障礙物" };
@@ -284,6 +303,7 @@ const ACTIVE = s => s === "running" || s === "starting";
 // 訓練中：用上次回報的步數和速度推估「現在」大概到哪裡，進度條每秒都會動
 function staleAfter(every, sps) { return Math.max(300, every && sps ? every / sps * 4 : 0); }
 function estimate(step, total, sps, st, updated, every) {
+  if (STATIC) return { step, est: false, stale: false };
   if (!ACTIVE(st) || !sps || !updated || !step) return { step, est: false, stale: false };
   const dt = now() - updated;
   if (dt > staleAfter(every, sps)) return { step, est: false, stale: true, dt };
@@ -306,7 +326,7 @@ async function getJSON(url) {
 
 async function refresh() {
   try {
-    const [data, sys] = await Promise.all([getJSON("/api/runs"), getJSON("/api/system").catch(() => null)]);
+    const [data, sys] = await Promise.all([getJSON(api.runs()), STATIC ? Promise.resolve(null) : getJSON(api.system()).catch(() => null)]);
     runs = data.runs; system = sys; lastOk = Date.now();
     watchTransitions(runs);
     const exists = s => s && runs.some(r => r.task === s.task && r.name === s.name);
@@ -319,7 +339,7 @@ async function refresh() {
     renderNav(data);
     renderStrip();
     if (!selected) { renderEmpty(data.root); return; }
-    const fresh = await getJSON(`/api/run?task=${encodeURIComponent(selected.task)}&name=${encodeURIComponent(selected.name)}`);
+    const fresh = await getJSON(api.run(selected.task, selected.name));
     detail = fresh;
     const sig = structSig(fresh);
     if (sig !== lastSig) { lastSig = sig; renderDetail(); }
@@ -337,6 +357,7 @@ function structSig(d) {
 
 // ---- 即時狀態列：所有正在跑（或剛結束）的訓練 + 電腦狀態 ----
 function renderStrip() {
+  if (STATIC) { $("strip").hidden = true; return; }  // 「即時狀態」只在連著後端時才有意義
   const t = now();
   const act = runs.filter(r => ACTIVE(r.state) || t - r.updated < 3600);
   const cards = act.map(r => {
@@ -396,6 +417,10 @@ function updateLive() {
     st.device ? `<span>${esc(st.device)}</span>` : "",
   ].join("");
   const hb = $("hb");
+  if (STATIC) {
+    hb.className = "hb";
+    hb.innerHTML = d.exported ? `快照時間 ${new Date(d.exported * 1000).toLocaleString("zh-TW", { hour12: false })}（${ago(d.exported)}），不會自動更新` : "靜態快照";
+  } else
   if (running) {
     const since = st.updated ? ago(st.updated) : "—";
     if (e.stale) {
@@ -445,7 +470,7 @@ function liveChart(d) {
 async function loadLog() {
   const term = $("term"); if (!term || !selected) return;
   try {
-    const r = await getJSON(`/api/log?task=${encodeURIComponent(selected.task)}&name=${encodeURIComponent(selected.name)}&lines=200`);
+    const r = await getJSON(api.log(selected.task, selected.name));
     const sig = selected.name + r.size;
     if (sig === logSig) return; logSig = sig;
     const atBottom = term.scrollHeight - term.scrollTop - term.clientHeight < 40;
@@ -526,6 +551,7 @@ function renderNav(data) {
   const job = data.job;
   $("foot").textContent = (data.errors && data.errors.length ? `${data.errors.length} 個訓練讀不到 · ` : "") +
     (job ? (job.kind === "video" ? "背景錄影中：" : "背景評估中：") + job.run : "背景工作待命中");
+  if (STATIC) $("foot").textContent = "靜態快照 · 在訓練的電腦上執行 python -m robodog.publish 更新";
   const fb = $("followbtn");
   fb.className = follow ? "pillbtn" : "pillbtn ghost";
   fb.textContent = follow ? "正在跟隨最新" : "跟隨最新";
@@ -692,7 +718,7 @@ function renderDetail() {
 
   if (sel) {
     const v = $("vid"); v.dataset.step = selStep;
-    v.src = `/media/${encodeURIComponent(d.task)}/${encodeURIComponent(d.name)}/${encodeURIComponent(sel.video)}`;
+    v.src = api.media(d.task, d.name, sel.video);
     if (keep != null) v.addEventListener("loadedmetadata", () => { v.currentTime = keep; }, { once: true });
     v.play().catch(() => {});
     $("cap").innerHTML = `<b>${fmt(sel.step)} 步</b> 的樣子 · reward ${sel.reward.toFixed(2)}` +
