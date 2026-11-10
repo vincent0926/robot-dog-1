@@ -178,3 +178,23 @@ def test_gait_shaping_rewards_trot_and_penalizes_flight():
     envs.make_env("walk", {"impl": "jax", "gait": {"trott": 1.0}})
   with pytest.raises(ValueError):
     envs.make_env("getup", {"impl": "jax", "gait": {}})
+
+
+def test_gait_analyze_trot_vs_pace():
+  from robodog import gait
+
+  t = np.arange(100)
+  phase = (t // 10) % 2  # 每 10 步（0.2 秒）換一組
+  # 順序 FR, FL, RR, RL。標準小跑：FR+RL 同時著地，FL+RR 同時著地，兩組輪流
+  trot = np.stack([phase == 0, phase == 1, phase == 1, phase == 0], 1).astype(float)
+  z = np.zeros((100, 4))
+  g = gait.analyze(trot, z, dt=0.02)
+  assert g["diag_sync"] == {"FR-RL": 1.0, "FL-RR": 1.0} and g["pair_opposite"] == {"FR-FL": 1.0, "RR-RL": 1.0}
+  assert g["duty_gap"] == 0 and g["all_air"] == 0 and all(gait.verdict(g).values())
+  # 溜步（pace）：同一側的兩隻腳一起動，對角腳反而不同步
+  pace = np.stack([phase == 0, phase == 1, phase == 0, phase == 1], 1).astype(float)
+  gp = gait.analyze(pace, z, dt=0.02)
+  assert gp["diag_sync"]["FR-RL"] == 0.0 and not all(gait.verdict(gp).values())
+  # 跛腳：其中一組只著地 25% 的時間
+  limp = trot.copy(); limp[:, 0] = limp[:, 3] = (t % 20 < 5)
+  assert gait.analyze(limp, z, dt=0.02)["duty_gap"] > 0.2

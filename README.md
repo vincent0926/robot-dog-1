@@ -211,6 +211,14 @@ walk 任務可以用鍵盤控制，先用滑鼠點一下視窗：
 | `,` / `.` | 向左 / 向右平移 |
 | `/` | 停下來 |
 
+### 量走路姿勢（步態驗收）
+
+```bash
+JAX_PLATFORMS=cpu python -m robodog.gait runs/walk/latest
+```
+
+會量四隻腳的著地比例、對角腳是否同步（小跑步 trot）、有沒有四腳同時騰空、步頻，並列出 ✅／❌ 的驗收結果，另存成該次訓練資料夾裡的 `gait.json`。訓練還在跑的時候加上 `JAX_PLATFORMS=cpu`，才不會搶顯示卡。
+
 ### 看訓練過程（每個 checkpoint 一段影片）
 
 ```bash
