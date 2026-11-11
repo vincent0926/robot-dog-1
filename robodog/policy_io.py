@@ -87,8 +87,12 @@ def load_inference_fn(path: str | Path, deterministic: bool = True):
   return ppo_networks.make_inference_fn(network)(params, deterministic=deterministic)
 
 
-def load_run(path: str | Path, impl: str | None = None, env_sets: dict | None = None):
-  """載入一次訓練的設定、環境和策略。回傳 (cfg, env, policy, ckpt_path)。"""
+def load_run(path: str | Path, impl: str | None = None, env_sets: dict | None = None, task: str | None = None):
+  """載入一次訓練的設定、環境和策略。回傳 (cfg, env, policy, ckpt_path)。
+
+  task：想拿這個策略去別的任務的環境上跑（例如 walk 練出來的策略放到 terrain 地形上量基準線）。
+  觀測和動作相同的任務之間才能這樣用。給了 task 就用該任務的預設環境，不套用這次訓練的 env 設定。
+  """
   import yaml
 
   from robodog import envs
@@ -98,7 +102,11 @@ def load_run(path: str | Path, impl: str | None = None, env_sets: dict | None = 
   run_dir = ckpt.parent.parent
   with open(run_dir / "config.yaml", encoding="utf-8") as f:
     cfg = yaml.safe_load(f)
-  env_overrides = deep_merge(cfg.get("env", {}) or {}, env_sets or {})
+  if task and task != cfg["task"]:
+    env_overrides = deep_merge({}, env_sets or {})
+    cfg = {**cfg, "task": task}
+  else:
+    env_overrides = deep_merge(cfg.get("env", {}) or {}, env_sets or {})
   if impl:
     env_overrides["impl"] = impl
   env = envs.make_env(cfg["task"], env_overrides)

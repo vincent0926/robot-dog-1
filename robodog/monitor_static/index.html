@@ -268,10 +268,10 @@ const api = STATIC ? {
   media: (t, n, f) => `/media/${enc(t)}/${enc(n)}/${enc(f)}`,
 };
 const POLL_MS = STATIC ? 60000 : 5000, HIDDEN_POLL_MS = STATIC ? 120000 : 30000;
-const TASKS = ["walk", "rough", "getup", "navigate"];
-const TASK = { walk: "行走", rough: "崎嶇地形", getup: "站起", navigate: "導航避障" };
-const VERB = { walk: "走路", rough: "在崎嶇地形上走", getup: "站起來", navigate: "繞過障礙物" };
-const WALK_LIKE = t => t === "walk" || t === "rough";
+const TASKS = ["walk", "rough", "terrain", "getup", "navigate"];
+const TASK = { walk: "行走", rough: "崎嶇地形", terrain: "樓梯斜坡", getup: "站起", navigate: "導航避障" };
+const VERB = { walk: "走路", rough: "在崎嶇地形上走", terrain: "爬樓梯、走斜坡", getup: "站起來", navigate: "繞過障礙物" };
+const WALK_LIKE = t => t === "walk" || t === "rough" || t === "terrain";
 const STATE = { running: "訓練中", starting: "啟動中", done: "完成", failed: "失敗", interrupted: "已中斷", stopped: "已停止" };
 const LABELS = {
   walk: { tracking_lin_vel: "直線速度追蹤", tracking_ang_vel: "轉向追蹤", lin_vel_z: "上下彈跳", ang_vel_xy: "左右搖晃",
@@ -279,6 +279,7 @@ const LABELS = {
     torques: "力矩", action_rate: "動作抖動", energy: "耗能", feet_clearance: "抬腳高度", feet_height: "腳步高度",
     feet_slip: "腳打滑", feet_air_time: "腳騰空時間" },
   get rough() { return this.walk; },
+  get terrain() { return this.walk; },
   getup: { orientation: "機身朝上", torso_height: "機身高度", posture: "關節姿勢", stand_still: "站穩不動", action_rate: "動作抖動",
     dof_pos_limits: "關節頂到極限", torques: "力矩", dof_acc: "關節加速度", dof_vel: "關節速度" },
   navigate: { progress: "往目標前進", heading: "面向目標", reached: "抵達目標", collision: "碰撞或出界", fall: "跌倒",
@@ -612,8 +613,8 @@ function evalSection(d) {
       <h2>${busy ? "評估中。" : "排隊等待評估。"}</h2><p class="lead">${busy ? `${ago(d.job.since)}開始，用 CPU 跑，不影響其他訓練。` : "背景工作空下來就會自動開始。"}</p></div></section>`;
   }
   const cards = Object.entries(EVAL_LABEL).filter(([k]) => k in e).map(([k, [lbl, f]]) => {
-    const [v, u] = f(e[k]); const tg = e.targets && e.targets[k]; const ok = e.verdict && k in e.verdict ? e.verdict[k] : null;
-    return `<div class="evcard"><span class="t">${lbl}</span><span class="v">${v}<small style="font-size:.4em;margin-left:4px">${u}</small></span>
+    const [v, u] = f(e[k]); const lbl2 = d.task === "terrain" && k === "success_rate" ? "穿過區塊（最弱的一項）" : lbl; const tg = e.targets && e.targets[k]; const ok = e.verdict && k in e.verdict ? e.verdict[k] : null;
+    return `<div class="evcard"><span class="t">${lbl2}</span><span class="v">${v}<small style="font-size:.4em;margin-left:4px">${u}</small></span>
       ${ok == null ? `<span class="t">參考數據</span>` : `<span class="verdict ${ok ? "pass" : "fail"}">${ok ? "通過" : "未達標"}</span><span class="t">目標 ${tg[0]} ${k.endsWith("_mps") ? tg[1] + " m/s" : pc(tg[1])}</span>`}</div>`;
   }).join("");
   return `<section class="band"><div class="wrap">

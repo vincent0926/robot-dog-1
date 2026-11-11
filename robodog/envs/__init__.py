@@ -16,8 +16,8 @@ PLAYGROUND_TASKS = {
     "getup": "Go1Getup",
     "rough": "Go1JoystickRoughTerrain",   # 崎嶇地形（高度場），觀測和 walk 一樣，可以直接接續 walk 的策略
 }
-TASKS = ("walk", "getup", "navigate", "rough")
-WALK_LIKE = ("walk", "rough")  # 用搖桿速度指令走路的任務
+TASKS = ("walk", "getup", "navigate", "rough", "terrain")
+WALK_LIKE = ("walk", "rough", "terrain")  # 用搖桿速度指令走路的任務
 
 
 def default_env_config(task: str):
@@ -26,6 +26,9 @@ def default_env_config(task: str):
   if task == "navigate":
     from robodog.envs import navigate
     return navigate.default_config()
+  if task == "terrain":
+    from robodog.envs import terrain
+    return terrain.default_config()
   raise ValueError(f"未知任務 '{task}'，可用：{TASKS}")
 
 
@@ -116,8 +119,13 @@ def make_env(task: str, env_overrides: Optional[dict] = None, **kwargs):
   gait = overrides.pop("gait", None)
   config = default_env_config(task)
   update_config_dict(config, overrides)
+  env = None
   if task in PLAYGROUND_TASKS:
     env = registry.load(PLAYGROUND_TASKS[task], config=config)
+  elif task == "terrain":
+    from robodog.envs import terrain
+    env = terrain.TerrainJoystick(config)
+  if env is not None:
     if gait is not None:
       if task not in WALK_LIKE:
         raise ValueError(f"env.gait 只能用在走路任務 {WALK_LIKE}，不能用在 {task}")
@@ -129,6 +137,6 @@ def make_env(task: str, env_overrides: Optional[dict] = None, **kwargs):
 
 def randomization_fn(task: str) -> Optional[Callable]:
   """回傳 domain randomization 函式（摩擦力、質量、重心…）。導航任務不需要。"""
-  if task in PLAYGROUND_TASKS:
+  if task in PLAYGROUND_TASKS or task == "terrain":
     return go1_randomize.domain_randomize
   return None

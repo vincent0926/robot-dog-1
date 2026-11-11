@@ -30,7 +30,7 @@ def test_deep_merge_and_set():
 
 
 def test_all_configs_load_and_match_env_fields():
-  for name in ("walk", "getup", "navigate", "rough", "walk_gait_cpu", "walk_gait"):
+  for name in ("walk", "getup", "navigate", "rough", "walk_gait_cpu", "walk_gait", "terrain", "terrain_cpu"):
     cfg = rcfg.load_config(f"configs/{name}.yaml")
     env_cfg = envs.default_env_config(cfg["task"])
     env_over = {k: v for k, v in cfg["env"].items() if k not in ("fall_penalty", "gait")}  # 這兩個是我們自己加的欄位

@@ -7,6 +7,7 @@
 | `walk` | `configs/walk.yaml` | 跟著搖桿速度指令走路 | 速度誤差 < 0.15 m/s，跌倒率 < 5% |
 | `getup` | `configs/getup.yaml` | 跌倒後自己站起來 | 5 秒內站穩的比例 ≥ 85% |
 | `navigate` | `configs/navigate.yaml` | 繞過障礙物走到目標點 | 抵達率 ≥ 80% |
+| `terrain` | `configs/terrain.yaml` | 盲走爬樓梯、走斜坡（不看地形） | 五種地形（難度 0~5）裡最弱的一項 ≥ 80% |
 | `rough` | `configs/rough.yaml` | 在凹凸不平的地形上跟著指令走，被推也不倒 | 速度誤差 < 0.20 m/s，跌倒率 < 5% |
 
 技術組合：
@@ -114,6 +115,27 @@ runs/walk/20261105-200000-first/
 ├── checkpoints/       每次評估存一份策略
 └── summary.json       花了多久
 ```
+
+### 樓梯與斜坡（`terrain`）
+
+地圖是 28m × 28m，切成 4m 的區塊，每個區塊是「一種地形 × 一個難度」。地形有平地、上坡、下坡、上樓梯、下樓梯、散落的方塊；難度 0~7，樓梯每階從 2cm 到 11.8cm，斜坡從 3° 到 19.8°。機器狗隨機出生在某個區塊的中央平台，往哪個方向走都會遇到那種地形。策略和 walk、rough 一樣是盲的，所以可以直接接續它們的權重。
+
+分三個階段，由淺到深（難度用 `--set env.terrain.max_level=N` 控制）：
+
+```bash
+python -m robodog.train configs/terrain.yaml --name stage1 --resume runs/rough/latest
+python -m robodog.train configs/terrain.yaml --name stage2 --resume runs/terrain/latest --set env.terrain.max_level=5
+python -m robodog.train configs/terrain.yaml --name stage3 --resume runs/terrain/latest --set env.terrain.max_level=7 --set ppo.num_timesteps=300000000
+```
+
+驗收會列出各地形、各難度的通過率，並用「最弱的一項」當成績（取平均會被下坡這類簡單的項目墊高）：
+
+```bash
+python -m robodog.evaluate runs/terrain/latest
+python -m robodog.evaluate runs/walk/latest --on terrain     # 拿別的任務練的策略來量基準線
+```
+
+還沒練樓梯的基準線（雲端 CPU，在崎嶇地形練過的策略）：上樓梯從難度 3（每階 6.2cm）起完全過不去，上坡從難度 5（15°）起掉到 30%，其他項目大多能過。
 
 ### 常用參數
 

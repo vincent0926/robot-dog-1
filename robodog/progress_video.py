@@ -100,7 +100,7 @@ def main(argv=None) -> None:
   # 策略參數當作 jit 的輸入，換 checkpoint 不用重新編譯
   @jax.jit
   def step(state, cmd, params, rng):
-    if task in ("walk", "rough"):
+    if task in ("walk", "rough", "terrain"):
       state.info["command"] = cmd
       obs = dict(state.obs)
       obs["state"] = obs["state"].at[-3:].set(cmd)
@@ -108,7 +108,14 @@ def main(argv=None) -> None:
     action, _ = make_policy(params, deterministic=True)(state.obs, rng)
     return env.step(state, action)
 
-  reset = jax.jit(env.reset)
+  if task == "terrain":
+    # 影片固定拍同一種地形（上樓梯，難度取這次訓練會抽到的最難那一級，最多 5），才看得出進步
+    from robodog.envs import terrain as T
+
+    lvl = min(int(env.unwrapped._max_level), 5)
+    reset = jax.jit(lambda k: env.unwrapped.reset_at(k, lvl, T.TYPES.index("stairs_up")))
+  else:
+    reset = jax.jit(env.reset)
   every = max(1, int(round(1 / (args.fps * env.dt))))
   fps = 1.0 / (env.dt * every)
   n_steps = int(args.seconds / env.dt)
@@ -133,7 +140,7 @@ def main(argv=None) -> None:
       rng, k = jax.random.split(rng)
       state = step(state, scripted_command(i * env.dt), params, k)
       traj.append(state)
-      if task in ("walk", "rough") and 1.0 <= i * env.dt < 3.0:  # 劇本前 3 秒是「前進 1 m/s」
+      if task in ("walk", "rough", "terrain") and 1.0 <= i * env.dt < 3.0:  # 劇本前 3 秒是「前進 1 m/s」
         fwd.append(float(env.get_local_linvel(state.data)[0]))
       if float(state.done) > 0:
         falls += 1
@@ -141,7 +148,7 @@ def main(argv=None) -> None:
         state = reset(k)
     frames = env.render(traj[::every], height=args.height, width=args.width, camera=CAMERA[task])
     fwd_speed = float(np.mean(fwd)) if fwd else None
-    extra = f"   fwd {fwd_speed:.2f} m/s (cmd 1.0)   falls {falls}" if task in ("walk", "rough") else ""
+    extra = f"   fwd {fwd_speed:.2f} m/s (cmd 1.0)   falls {falls}" if task in ("walk", "rough", "terrain") else ""
     frames = _label(frames, text + extra)
     imageio.mimsave(path, frames, fps=fps, macro_block_size=8)
     clips.append(frames)

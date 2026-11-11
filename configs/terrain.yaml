@@ -1,0 +1,66 @@
+# 任務五：樓梯與斜坡（盲走，不看地形，只靠關節、IMU 和指令；觀測和 walk、rough 完全相同）
+# 地形說明見 robodog/envs/terrain.py：28m x 28m 的地圖，每個 4m 區塊是「一種地形 x 一個難度」。
+#
+# 分三個階段、由淺到深，每個階段接著上一階段的結果練（用 --set env.terrain.max_level=N 調難度上限）：
+#
+#   階段一（難度 0~2：樓梯每階 2~4.8cm、斜坡 3~8°）：從步態糾正好的走路／崎嶇地形策略出發
+#     python -m robodog.train configs/terrain.yaml --name stage1 --resume runs/rough/latest
+#   階段二（難度 0~5：每階到 9cm、斜坡到 15°）
+#     python -m robodog.train configs/terrain.yaml --name stage2 --resume runs/terrain/latest --set env.terrain.max_level=5
+#   階段三（難度 0~7：每階到 11.8cm、斜坡到 19.8°）
+#     python -m robodog.train configs/terrain.yaml --name stage3 --resume runs/terrain/latest --set env.terrain.max_level=7 --set ppo.num_timesteps=300000000
+#
+# 驗收：python -m robodog.evaluate runs/terrain/latest   （看「最弱的一項」≥ 80%，以及各難度的表格）
+# 基準線（還沒練樓梯的策略放上去）：上樓梯每階 6.2cm 起完全過不去，見 docs 或 README。
+task: terrain
+seed: 0
+domain_randomization: true
+
+env:
+  impl: warp
+  gait:                       # 沿用小跑獎勵；樓梯需要不同的落腳時機，所以比 rough 的 3.0 放鬆一些
+    trot: 2.0
+    flight: 1.0
+    short_swing: 0.3
+    swing_time: 0.2
+  fall_penalty: 3.0
+  episode_length: 1000
+  terrain:
+    max_level: 2              # 階段一。之後用 --set 加深
+  command_config:
+    a: [1.0, 0.5, 1.0]        # 樓梯上不需要跑那麼快
+  pert_config:
+    enable: true
+    velocity_kick: [0.0, 1.0]
+    kick_durations: [0.05, 0.2]
+    kick_wait_times: [1.0, 3.0]
+  reward_config:
+    scales:
+      tracking_lin_vel: 2.0
+      tracking_ang_vel: 1.0
+      pose: 0.1
+      feet_air_time: 0.5
+      feet_clearance: -2.0    # 這個版本算的是「離地面多高」（terrain.py 覆寫過），爬樓梯要把腳抬高
+      energy: -0.0005
+
+ppo:
+  num_timesteps: 200000000    # 階段一 2 億步（5060 上約 20～30 分鐘）
+  num_evals: 10
+  num_envs: 4096
+  batch_size: 256
+  num_minibatches: 32
+  num_updates_per_batch: 4
+  unroll_length: 20
+  learning_rate: 0.0003
+  entropy_cost: 0.01
+  discounting: 0.99
+  reward_scaling: 1.0
+  max_grad_norm: 1.0
+  normalize_observations: true
+  num_resets_per_eval: 10
+  action_repeat: 1
+  network:
+    policy_hidden_layer_sizes: [512, 256, 128]
+    value_hidden_layer_sizes: [512, 256, 128]
+    policy_obs_key: state
+    value_obs_key: privileged_state
