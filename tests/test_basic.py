@@ -198,3 +198,14 @@ def test_gait_analyze_trot_vs_pace():
   # 跛腳：其中一組只著地 25% 的時間
   limp = trot.copy(); limp[:, 0] = limp[:, 3] = (t % 20 < 5)
   assert gait.analyze(limp, z, dt=0.02)["duty_gap"] > 0.2
+
+
+def test_falls_bin_rates():
+  from robodog import falls
+
+  fell = np.array([1.0, 0.0, 1.0, 1.0, 0.0, 0.0])
+  x = np.array([0.1, 0.2, 0.7, 0.9, 1.2, 1.5])
+  r = falls.bin_rates(fell, x, [0, 0.5, 1.0, 1.5])
+  assert [b["n"] for b in r] == [2, 2, 2]  # 最後一組包含上界 1.5
+  assert [round(b["rate"], 2) for b in r] == [0.5, 1.0, 0.0]
+  assert np.isnan(falls.bin_rates(fell, x, [0, 0.01, 2])[0]["rate"])  # 空的組不會除以 0
