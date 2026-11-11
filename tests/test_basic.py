@@ -209,3 +209,10 @@ def test_falls_bin_rates():
   assert [b["n"] for b in r] == [2, 2, 2]  # 最後一組包含上界 1.5
   assert [round(b["rate"], 2) for b in r] == [0.5, 1.0, 0.0]
   assert np.isnan(falls.bin_rates(fell, x, [0, 0.01, 2])[0]["rate"])  # 空的組不會除以 0
+
+
+def test_terrain_half_size_only_for_rough():
+  from robodog import evaluate as ev
+
+  assert ev.terrain_half_size(envs.make_env("walk", {"impl": "jax"})) is None  # 平地沒有邊界
+  assert ev.terrain_half_size(envs.make_env("rough", {"impl": "jax"})) == 10.0  # 崎嶇地形是 20m x 20m

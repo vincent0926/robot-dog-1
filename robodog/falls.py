@@ -48,15 +48,22 @@ def measure(run: str, episodes: int, push: bool, impl: str | None, seed: int, se
     return state.replace(obs=obs)
 
   steps = int(seconds / env.dt)
-  _, alive, _, hist = ev._rollout(env, policy, n, steps, jax.random.PRNGKey(seed + 1), prepare,
-                                  lambda s, ns, t: jp.zeros(n))
-  fell = 1.0 - np.asarray(alive, dtype=float)
-  hist = np.asarray(hist)
+  _, alive, xy, hist = ev._rollout(env, policy, n, steps, jax.random.PRNGKey(seed + 1), prepare,
+                                   lambda s, ns, t: ns.data.qpos[:, :2])
+  fell_all = 1.0 - np.asarray(alive, dtype=float)
+  hist, xy = np.asarray(hist), np.asarray(xy)
+  # 倒下時的位置；離地形邊界 0.5m 內算「走出地圖邊緣」，不算走路不穩
+  last = np.clip(hist.sum(0) - 1, 0, steps - 1)
+  pos = xy[last, np.arange(n)]
+  bound = ev.terrain_half_size(env)
+  at_edge = (fell_all == 1) & (np.abs(pos).max(1) >= bound - 0.5) if bound else np.zeros(n, bool)
+  fell = fell_all * (~at_edge)
   c = np.asarray(cmd)
   t_fall = np.where(fell == 1, np.argmin(hist, axis=0) * env.dt, np.nan)
   speed = np.linalg.norm(c[:, :2], axis=1)
   return {
       "checkpoint": str(ckpt), "push": push, "episodes": n, "fall_rate": float(fell.mean()),
+      "edge_exit_rate": float(at_edge.mean()), "terrain_half_size": bound,
       "fall_time_mean_s": float(np.nanmean(t_fall)) if fell.any() else None,
       "fall_time_hist": np.histogram(t_fall[fell == 1], bins=[0, 2, 5, 10, 15, 20])[0].tolist() if fell.any() else [0] * 5,
       "by_vx": bin_rates(fell, np.abs(c[:, 0]), [0, 0.5, 1.0, 1.5]),
@@ -68,6 +75,8 @@ def measure(run: str, episodes: int, push: bool, impl: str | None, seed: int, se
 
 def show(r: dict) -> None:
   print(f"\n=== {'有推擠' if r['push'] else '沒推擠'}：跌倒率 {r['fall_rate'] * 100:.1f}%（{r['episodes']} 回合）===")
+  if r.get("terrain_half_size"):
+    print(f"另外有 {r['edge_exit_rate'] * 100:.1f}% 是走到地形邊緣（±{r['terrain_half_size']:.0f}m）才倒下，不算跌倒")
   if r["fall_time_mean_s"] is not None:
     h = r["fall_time_hist"]
     print(f"跌倒平均發生在第 {r['fall_time_mean_s']:.1f} 秒；時間分布 0-2s:{h[0]} 2-5s:{h[1]} 5-10s:{h[2]} 10-15s:{h[3]} 15-20s:{h[4]}")

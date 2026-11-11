@@ -208,6 +208,18 @@ python -m robodog.evaluate runs/walk/latest
 
 ---
 
+### 崎嶇地形的評估：走出地圖邊緣不算跌倒
+
+崎嶇地形（`rough`）只有 20 m × 20 m。評估時每個回合固定一個指令走 20 秒，直走又夠快的機器狗會走出地圖邊緣然後掉下去，那不是走路不穩。所以評估會把「倒在離邊界 0.5 m 以內」的另外算成 `edge_exit_rate`，不計入 `fall_rate`，兩個數字都會顯示。想看跌倒的細節：
+
+```bash
+python -m robodog.falls runs/rough/latest
+```
+
+它會依指令大小分組、分別在有推擠和沒推擠下量，並說明跌倒發生在哪個時間點。
+
+---
+
 ## 4. 播放
 
 ### 開 3D 視窗

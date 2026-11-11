@@ -53,6 +53,12 @@ def _rollout(env, policy, n_envs, n_steps, rng, prepare_fn, record_fn):
   return run(rng)
 
 
+def terrain_half_size(env):
+  """有高度場（崎嶇地形）的環境回傳地形的半邊長（公尺），沒有就回傳 None。"""
+  m = env.mj_model
+  return float(m.hfield_size[0][0]) if m.nhfield else None
+
+
 def eval_walk(env, policy, n_envs, rng, seconds=20.0, warmup=1.0):
   import jax
   import jax.numpy as jp
@@ -73,12 +79,24 @@ def eval_walk(env, policy, n_envs, rng, seconds=20.0, warmup=1.0):
   def record(state, nstate, t):
     v = jax.vmap(env.get_local_linvel)(nstate.data)[:, :2]
     err = jp.linalg.norm(v - state.info["command"][:, :2], axis=-1)
-    return err
+    return jp.concatenate([err[:, None], nstate.data.qpos[:, :2]], axis=1)  # 速度誤差、機身 x、y
 
-  _, alive, errs, alive_hist = _rollout(env, policy, n_envs, n_steps, rng, prepare, record)
+  _, alive, recs, alive_hist = _rollout(env, policy, n_envs, n_steps, rng, prepare, record)
+  errs, xy = recs[..., 0], recs[..., 1:]
   mask = alive_hist & (jp.arange(n_steps)[:, None] * env.dt >= warmup)
   vel_error = float(jp.sum(errs * mask) / jp.maximum(jp.sum(mask), 1))
-  return {"vel_error_mps": vel_error, "fall_rate": float(1.0 - jp.mean(alive))}
+  fell = ~alive
+  out = {"vel_error_mps": vel_error, "fall_rate": float(jp.mean(fell))}
+  bound = terrain_half_size(env)
+  if bound is not None:
+    # 崎嶇地形只有 20m x 20m。整回合固定一個指令，直走 20 秒會走出地圖邊緣然後掉下去，那不是走路不穩。
+    # 所以倒在邊緣附近（離邊界 0.5m 內）的另外算，不計入 fall_rate。
+    last = jp.clip(jp.sum(alive_hist, axis=0) - 1, 0, n_steps - 1)
+    pos = xy[last, jp.arange(n_envs)]
+    at_edge = fell & (jp.max(jp.abs(pos), axis=-1) >= bound - 0.5)
+    out["fall_rate"] = float(jp.mean(fell & ~at_edge))
+    out["edge_exit_rate"] = float(jp.mean(at_edge))
+  return out
 
 
 def eval_getup(env, policy, n_envs, rng, seconds=5.0):
