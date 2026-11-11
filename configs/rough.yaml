@@ -1,13 +1,19 @@
 # 任務四：崎嶇地形行走 + 被推也不倒（往 Spot 那種「哪裡都能走」的方向）
 # 環境是 MuJoCo Playground 的 Go1JoystickRoughTerrain（高度場地形，凹凸不平）。
 # 觀測和 walk 完全一樣，建議從已經會走路的策略接著練（課程學習：先平地、再崎嶇）：
-#   python -m robodog.train configs/rough.yaml --resume runs/walk/latest --name from-walk
+#   python -m robodog.train configs/rough.yaml --resume runs/walk/latest --name from-gait
+# （runs/walk/latest 要是步態糾正過的那一次，例如 gait3）
 task: rough
 seed: 0
 domain_randomization: true   # 隨機摩擦力、質量、重心
 
 env:
   impl: warp
+  gait:                       # 保持剛糾正好的「對角小跑」姿勢（walk_gait.yaml 練出來的），不然崎嶇地形會把它練掉
+    trot: 3.0
+    flight: 1.0
+    short_swing: 0.3
+    swing_time: 0.2
   fall_penalty: 3.0           # 跌倒直接扣分（Playground 會把每步 reward 截到 >= 0，原本的跌倒懲罰幾乎無效）
   episode_length: 1000        # 20 秒
   command_config:
