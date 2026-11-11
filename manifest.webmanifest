@@ -1,0 +1,9 @@
+{
+  "name": "Robodog 訓練監看",
+  "short_name": "Robodog",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#0071e3",
+  "icons": [{"src": "icon.svg", "sizes": "any", "type": "image/svg+xml"}]
+}
