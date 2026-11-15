@@ -10,6 +10,11 @@
 #   階段三（難度 0~7：每階到 11.8cm、斜坡到 19.8°）
 #     python -m robodog.train configs/terrain.yaml --name stage3 --resume runs/terrain/latest --set env.terrain.max_level=7 --set ppo.num_timesteps=300000000
 #
+# 針對弱點加練：用 env.terrain.type_weights 調整各地形被抽到的比例（順序：flat, slope_up, slope_down,
+# stairs_up, stairs_down, boxes）。例如上樓梯最弱時，從階段二接著練、上樓梯約 41%：
+#   python -m robodog.train configs/terrain.yaml --name stage2-stairs --resume runs/terrain/<階段二> \
+#     --set env.terrain.max_level=5 --set 'env.terrain.type_weights=[1,1,1,3.5,1,1]'
+#
 # 驗收：python -m robodog.evaluate runs/terrain/latest   （看「最弱的一項」≥ 80%，以及各難度的表格）
 # 基準線（還沒練樓梯的策略放上去）：上樓梯每階 6.2cm 起完全過不去，見 docs 或 README。
 task: terrain

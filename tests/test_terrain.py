@@ -94,6 +94,26 @@ def test_reset_spawns_on_platform_and_respects_max_level():
   assert len({tuple(np.round(p, 0)) for p in xy}) > 10   # 不是全部擠在同一個區塊
 
 
+def _spawn_types(e, n=256):
+  s = jax.jit(jax.vmap(e.reset))(jax.random.split(jax.random.PRNGKey(0), n))
+  xy = np.asarray(s.data.qpos[:, :2])
+  centers = np.array([[T.tile_center(lv, ty) for ty in range(T.N_TYPES)] for lv in range(T.N_LEVELS)])
+  return np.array([np.unravel_index(np.abs(centers - p).max(-1).argmin(), centers.shape[:2])[1] for p in xy])
+
+
+def test_type_weights_oversample_and_exclude():
+  stairs_up = T.TYPES.index("stairs_up")
+  # 只給上樓梯 → 全部都在上樓梯出生
+  only = envs.make_env("terrain", {"impl": "jax", "terrain": {"max_level": 5, "type_weights": [0, 0, 0, 1, 0, 0]}})
+  assert set(_spawn_types(only)) == {stairs_up}
+  # 上樓梯 3.5、其他 1 → 約 41%（256 次抽樣，給寬一點的範圍）
+  more = envs.make_env("terrain", {"impl": "jax", "terrain": {"max_level": 5, "type_weights": [1, 1, 1, 3.5, 1, 1]}})
+  frac = float(np.mean(_spawn_types(more) == stairs_up))
+  assert 0.30 < frac < 0.53
+  with pytest.raises(ValueError):
+    envs.make_env("terrain", {"impl": "jax", "terrain": {"type_weights": [1, 1, 1]}})
+
+
 def test_terrain_config_typo_is_rejected():
   with pytest.raises(KeyError):
     envs.make_env("terrain", {"impl": "jax", "terrain": {"max_levl": 3}})

@@ -63,6 +63,10 @@ def default_config() -> config_dict.ConfigDict:
       slope_base_deg=3.0,   # 斜坡第 0 級角度
       slope_gain_deg=2.4,   # 每升一級增加多少度 → 第 7 級 19.8°
       seed=0,
+      # 訓練時每種地形被抽到的相對比例，順序同 TYPES：
+      #   flat, slope_up, slope_down, stairs_up, stairs_down, boxes
+      # 全部一樣 = 等機率。想加練某種地形就調高它，例如上樓梯 3.5 → 約 41%。
+      type_weights=(1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
   )
   # 在樓梯上，這幾項要放寬，不然會懲罰「爬樓梯本來就會有的動作」：
   s = cfg.reward_config.scales
@@ -181,6 +185,12 @@ class TerrainJoystick(go1_joystick.Joystick):
     self._ground = make_height_fn(self._heights)
     self._centers = jp.asarray(self._centers_np, dtype=jp.float32)
     self._max_level = int(config.terrain.max_level)
+    w = np.asarray(config.terrain.type_weights, dtype=np.float64)
+    if w.shape != (N_TYPES,) or np.any(w < 0) or w.sum() <= 0:
+      raise ValueError(f"terrain.type_weights 要是 {N_TYPES} 個不小於 0 的數字（順序：{', '.join(TYPES)}），收到 {tuple(w)}")
+    self._type_uniform = bool(np.all(w == w[0]))  # 等機率時用原本的抽法（結果和加這個設定之前完全一樣）
+    with np.errstate(divide="ignore"):
+      self._type_logits = jp.asarray(np.log(w / w.sum()), dtype=jp.float32)  # 比例 0 → log 0 = -inf，永遠抽不到
 
   # ---- 出生 ----
 
@@ -194,10 +204,13 @@ class TerrainJoystick(go1_joystick.Joystick):
     return state.replace(data=data, obs=self._get_obs(data, state.info))
 
   def reset(self, rng: jax.Array) -> mjx_env.State:
-    """訓練用：隨機抽一個區塊（難度不超過 terrain.max_level，地形六種等機率）。"""
+    """訓練用：隨機抽一個區塊（難度不超過 terrain.max_level；地形依 terrain.type_weights 的比例）。"""
     rng, k_level, k_type = jax.random.split(rng, 3)
     level = jax.random.randint(k_level, (), 0, self._max_level + 1)
-    typ = jax.random.randint(k_type, (), 0, N_TYPES)
+    if self._type_uniform:
+      typ = jax.random.randint(k_type, (), 0, N_TYPES)
+    else:
+      typ = jax.random.categorical(k_type, self._type_logits)
     return self.reset_at(rng, level, typ)
 
   # ---- 獎勵：離地高度要扣掉地面高度 ----
