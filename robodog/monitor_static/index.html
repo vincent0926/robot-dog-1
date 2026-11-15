@@ -551,7 +551,11 @@ function renderNav(data) {
   $("ltitle").textContent = task ? TASK[task] : "訓練監看";
   const job = data.job;
   $("foot").textContent = (data.errors && data.errors.length ? `${data.errors.length} 個訓練讀不到 · ` : "") +
-    (job ? (job.kind === "video" ? "背景錄影中：" : "背景評估中：") + job.run : "背景工作待命中");
+    (job ? ({ video: "背景錄影中：", eval: "背景評估中：", publish: "正在發佈到 " }[job.kind] || "背景工作：") + job.run : "背景工作待命中") +
+    (data.publish && data.publish.enabled
+      ? (data.publish.error ? ` · ${data.publish.error}`
+        : data.publish.last_ok ? ` · 上次自動發佈 ${ago(data.publish.last_ok)}` : " · 自動發佈：等背景工作做完")
+      : "");
   if (STATIC) $("foot").textContent = "靜態快照 · 在訓練的電腦上執行 python -m robodog.publish 更新";
   const fb = $("followbtn");
   fb.className = follow ? "pillbtn" : "pillbtn ghost";

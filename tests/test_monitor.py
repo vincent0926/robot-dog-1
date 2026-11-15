@@ -167,3 +167,63 @@ def test_publish_pages_url():
   assert publish.pages_url("https://github.com/vincent0926/robot-dog-1.git") == "https://vincent0926.github.io/robot-dog-1/"
   assert publish.pages_url("git@github.com:vincent0926/robot-dog-1.git") == "https://vincent0926.github.io/robot-dog-1/"
   assert publish.pages_url("/some/local/path") is None
+
+
+def test_auto_publish_only_when_idle_and_changed(tmp_path, monkeypatch):
+  """--publish：背景工作都做完、而且內容有變才發佈；失敗會等間隔再試。"""
+  runs = tmp_path / "runs"
+  run = _fake_run(runs, "20260101-000000-a", state="done", pid=None, video_for=(1000, 2000))
+  (run / "eval.json").write_text(json.dumps({"step": 2000}))
+
+  calls, rc = [], {"value": 0}
+
+  class Done:
+    def __init__(self, code):
+      self.returncode = code
+
+  def fake_run(cmd, **kw):
+    calls.append(cmd)
+    return Done(rc["value"])
+
+  monkeypatch.setattr(monitor.subprocess, "run", fake_run)
+  clock = {"t": 1000.0}
+  monkeypatch.setattr(monitor.time, "time", lambda: clock["t"])
+
+  w = monitor.Worker(runs, monitor.TBCache(), videos=True, evals=True, eval_episodes=1, publish_every=600)
+  w._tick()
+  assert len(calls) == 1 and calls[0][1:3] == ["-m", "robodog.publish"]
+  assert w.publish["last_ok"] == 1000.0 and w.publish["error"] is None and w.current is None
+
+  clock["t"] += 3600
+  w._tick()  # 沒有任何改變 → 不重複發佈
+  assert len(calls) == 1
+
+  # 有新 checkpoint：先錄影（不發佈），影片錄好後才發佈
+  c = run / "checkpoints" / f"{3000:012d}"
+  c.mkdir()
+  (c / "ppo_network_config.json").write_text("{}")
+  w._tick()
+  assert len(calls) == 2 and "robodog.progress_video" in calls[1]
+  prog = json.loads((run / "videos" / "progress.json").read_text())
+  prog["clips"].append({"step": 3000, "video": "step_000000003000.mp4"})
+  (run / "videos" / "progress.json").write_text(json.dumps(prog))
+  (run / "eval.json").write_text(json.dumps({"step": 3000}))
+  rc["value"] = 1  # 這次推送失敗
+  w._tick()
+  assert len(calls) == 3 and w.publish["error"]
+
+  clock["t"] += 60
+  w._tick()  # 還沒到 10 分鐘 → 不重試
+  assert len(calls) == 3
+  rc["value"] = 0
+  clock["t"] += 600
+  w._tick()
+  assert len(calls) == 4 and w.publish["error"] is None
+
+
+def test_auto_publish_off_by_default(tmp_path, monkeypatch):
+  runs = tmp_path / "runs"
+  run = _fake_run(runs, "20260101-000000-a", state="done", pid=None, video_for=(1000, 2000))
+  (run / "eval.json").write_text(json.dumps({"step": 2000}))
+  monkeypatch.setattr(monitor.subprocess, "run", lambda *a, **k: pytest.fail("不應該執行任何指令"))
+  monitor.Worker(runs, monitor.TBCache(), videos=True, evals=True, eval_episodes=1)._tick()
