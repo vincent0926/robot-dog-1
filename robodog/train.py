@@ -229,6 +229,10 @@ def main(argv=None) -> None:
   rand_fn = envs.randomization_fn(task) if cfg.get("domain_randomization", False) else None
 
   ppo_cfg = dict(cfg["ppo"])
+  if task == "terrain" and ((cfg.get("env") or {}).get("terrain") or {}).get("curriculum") and ppo_cfg.get("num_resets_per_eval"):
+    # 自動調難度把「每個環境現在練到哪個難度」記在環境狀態裡，brax 的定期全部重置會把它清回起點
+    print(f"[train] 自動調難度開啟：num_resets_per_eval {ppo_cfg['num_resets_per_eval']} → 0（避免難度被重置）")
+    ppo_cfg["num_resets_per_eval"] = 0
   ppo_cfg.setdefault("episode_length", env._config.episode_length)
   _check_batch(ppo_cfg)
   ppo_kwargs = _ppo_kwargs(ppo_cfg, task)
