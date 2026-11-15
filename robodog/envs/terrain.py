@@ -51,7 +51,10 @@ ROW_IS_Y = True
 def default_config() -> config_dict.ConfigDict:
   cfg = go1_joystick.default_config()
   cfg.naconmax = 8 * 8192   # 和 Playground 的崎嶇地形一樣
-  cfg.njmax = 12 + 48
+  # 約束列數上限（每個環境）。Playground 崎嶇地形用 12 + 48 = 60，但樓梯邊緣一隻腳可能同時碰到
+  # 好幾個高度場面，GPU 上會出現「nefc overflow - please increase njmax beyond 60」，
+  # 超過的接觸會被直接丟掉（腳可能陷進台階）。放大一倍，多用的顯示卡記憶體很少。
+  cfg.njmax = 120
   cfg.episode_length = 1000
   cfg.terrain = config_dict.create(
       max_level=7,          # 最難會抽到的難度（0～7）。分階段訓練時由淺到深
