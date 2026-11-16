@@ -252,7 +252,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 6px 24px; justify-content: s
 </nav>
 <section class="livestrip" id="strip" aria-label="即時狀態" hidden><div class="wrap wide" id="stripin"></div></section>
 <main id="content"><div class="empty"><p class="muted">讀取中…</p></div></main>
-<footer><div class="wrap wide"><span>Robodog 訓練監看 · 每 5 秒自動更新</span><span id="foot"></span></div></footer>
+<footer><div class="wrap wide"><span id="footl">Robodog 訓練監看 · 每 5 秒自動更新</span><span id="foot"></span></div></footer>
 
 <script>
 // 靜態快照模式：網頁匯出到 GitHub Pages 之後，沒有後端，改讀 api/*.json（匯出時會在頁面最前面加上 window.STATIC_MODE）
@@ -297,6 +297,7 @@ const $ = id => document.getElementById(id);
 
 let runs = [], task = null, selected = null, detail = null, selStep = null, follow = true, lastOk = 0, lastSig = "";
 let system = null, prevRuns = null, logSig = "";
+let snap = { now: 0, every: null };  // 雲端版：這份資料是什麼時候從訓練電腦同步上來的、多久同步一次
 const now = () => Date.now() / 1000;
 const GB = b => (b / 2 ** 30).toFixed(1);
 const ACTIVE = s => s === "running" || s === "starting";
@@ -304,10 +305,10 @@ const ACTIVE = s => s === "running" || s === "starting";
 // 訓練中：用上次回報的步數和速度推估「現在」大概到哪裡，進度條每秒都會動
 function staleAfter(every, sps) { return Math.max(300, every && sps ? every / sps * 4 : 0); }
 function estimate(step, total, sps, st, updated, every) {
-  if (STATIC) return { step, est: false, stale: false };
   if (!ACTIVE(st) || !sps || !updated || !step) return { step, est: false, stale: false };
   const dt = now() - updated;
-  if (dt > staleAfter(every, sps)) return { step, est: false, stale: true, dt };
+  const slack = STATIC ? (snap.every || 10) * 60 * 2 + 300 : 0;   // 雲端版的資料本來就晚一個同步間隔
+  if (dt > staleAfter(every, sps) + slack) return { step, est: false, stale: true, dt };
   return { step: Math.min(total || Infinity, step + sps * dt), est: dt > 2, stale: false, dt };
 }
 
@@ -320,6 +321,7 @@ function setSelected(t, name) {
   history.replaceState(null, "", "#" + encodeURIComponent(t + "/" + name));
 }
 async function getJSON(url) {
+  if (STATIC) url += (url.includes("?") ? "&" : "?") + "t=" + Date.now();  // 繞過 GitHub Pages 的 CDN 快取
   const r = await fetch(url, { cache: "no-store" });
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status);
   return r.json();
@@ -328,7 +330,8 @@ async function getJSON(url) {
 async function refresh() {
   try {
     const [data, sys] = await Promise.all([getJSON(api.runs()), STATIC ? Promise.resolve(null) : getJSON(api.system()).catch(() => null)]);
-    runs = data.runs; system = sys; lastOk = Date.now();
+    runs = data.runs; system = STATIC ? data.system || null : sys; lastOk = Date.now();
+    snap = { now: data.now || 0, every: data.every_min || null };
     watchTransitions(runs);
     const exists = s => s && runs.some(r => r.task === s.task && r.name === s.name);
     if (!exists(selected)) {
@@ -358,7 +361,6 @@ function structSig(d) {
 
 // ---- 即時狀態列：所有正在跑（或剛結束）的訓練 + 電腦狀態 ----
 function renderStrip() {
-  if (STATIC) { $("strip").hidden = true; return; }  // 「即時狀態」只在連著後端時才有意義
   const t = now();
   const act = runs.filter(r => ACTIVE(r.state) || t - r.updated < 3600);
   const cards = act.map(r => {
@@ -393,7 +395,8 @@ function renderStrip() {
   const strip = $("strip");
   strip.hidden = !cards && !stats.length;
   const running = act.filter(r => ACTIVE(r.state)).length;
-  $("stripin").innerHTML = `<p class="strip-h"><b>即時狀態</b><span>${running ? `${running} 個訓練進行中` : "目前沒有訓練在跑"}${system && !(system.gpus || []).length ? " · 這台電腦沒有偵測到 NVIDIA 顯示卡" : ""}</span></p>
+  const when = STATIC && snap.now ? ` · 電腦狀態是 ${ago(snap.now)}同步的` : "";
+  $("stripin").innerHTML = `<p class="strip-h"><b>即時狀態</b><span>${running ? `${running} 個訓練進行中` : "目前沒有訓練在跑"}${when}${system && !(system.gpus || []).length ? " · 這台電腦沒有偵測到 NVIDIA 顯示卡" : ""}</span></p>
     ${cards ? `<div class="runcards">${cards}</div>` : ""}${stats.length ? `<div class="sys">${stats.join("")}</div>` : ""}`;
   $("stripin").querySelectorAll(".runcard").forEach(b => b.onclick = () => { setSelected(b.dataset.task, b.dataset.name); refresh(); });
 }
@@ -420,7 +423,10 @@ function updateLive() {
   const hb = $("hb");
   if (STATIC) {
     hb.className = "hb";
-    hb.innerHTML = d.exported ? `快照時間 ${new Date(d.exported * 1000).toLocaleString("zh-TW", { hour12: false })}（${ago(d.exported)}），不會自動更新` : "靜態快照";
+    const sync = snap.every ? `訓練電腦每 ${snap.every} 分鐘同步一次` : "在訓練電腦上執行 robodog.monitor --publish 會自動同步";
+    const when = d.exported ? `上次同步 ${ago(d.exported)}` : "";
+    const live = running && !e.stale && d.step ? `<span class="dot on"></span>訓練中 · 進度依最後回報的速度推估 · ` : "";
+    hb.innerHTML = `${live}雲端版 · ${when} · ${sync}`;
   } else
   if (running) {
     const since = st.updated ? ago(st.updated) : "—";
@@ -534,7 +540,9 @@ function setupBell() {
 function setConn(ok, msg) {
   const c = $("conn");
   c.classList.toggle("bad", !ok);
-  c.textContent = ok ? "更新於 " + new Date(lastOk).toLocaleTimeString("zh-TW", { hour12: false }) : "連不上監看程式" + (msg ? "：" + msg : "");
+  c.textContent = ok ? (STATIC && snap.now ? "同步於 " + new Date(snap.now * 1000).toLocaleTimeString("zh-TW", { hour12: false })
+      : "更新於 " + new Date(lastOk).toLocaleTimeString("zh-TW", { hour12: false }))
+    : (STATIC ? "讀不到雲端資料" : "連不上監看程式") + (msg ? "：" + msg : "");
 }
 
 function renderNav(data) {
@@ -556,7 +564,8 @@ function renderNav(data) {
       ? (data.publish.error ? ` · ${data.publish.error}`
         : data.publish.last_ok ? ` · 上次自動發佈 ${ago(data.publish.last_ok)}` : " · 自動發佈：等背景工作做完")
       : "");
-  if (STATIC) $("foot").textContent = "靜態快照 · 在訓練的電腦上執行 python -m robodog.publish 更新";
+  if (STATIC) $("footl").textContent = "Robodog 訓練監看（雲端版）";
+  if (STATIC) $("foot").textContent = snap.now ? `雲端版 · 資料同步於 ${ago(snap.now)} · 網頁每分鐘自動檢查新資料` : "雲端版";
   const fb = $("followbtn");
   fb.className = follow ? "pillbtn" : "pillbtn ghost";
   fb.textContent = follow ? "正在跟隨最新" : "跟隨最新";
@@ -752,7 +761,7 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) loop
 setupBell();
 loop();
 setInterval(() => { if (!document.hidden) { updateLive(); } }, 1000);
-setInterval(() => { if (!document.hidden && lastOk && Date.now() - lastOk > 20000) setConn(false, "超過 20 秒沒更新"); }, 5000);
+setInterval(() => { if (!document.hidden && lastOk && Date.now() - lastOk > POLL_MS * 4) setConn(false, `超過 ${Math.round(POLL_MS * 4 / 1000)} 秒沒更新`); }, 5000);
 </script>
 </body>
 </html>

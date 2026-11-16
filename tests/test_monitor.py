@@ -227,3 +227,37 @@ def test_auto_publish_off_by_default(tmp_path, monkeypatch):
   (run / "eval.json").write_text(json.dumps({"step": 2000}))
   monkeypatch.setattr(monitor.subprocess, "run", lambda *a, **k: pytest.fail("不應該執行任何指令"))
   monitor.Worker(runs, monitor.TBCache(), videos=True, evals=True, eval_episodes=1)._tick()
+
+
+def test_auto_publish_during_training_when_step_changes(tmp_path, monkeypatch):
+  """訓練中：沒有新 checkpoint，但步數往前走了 → 也要同步到雲端版。"""
+  runs = tmp_path / "runs"
+  run = _fake_run(runs, "20260101-000000-a", state="running", pid=os.getpid(), video_for=(1000, 2000))
+  monkeypatch.setattr(monitor, "_is_our_trainer", lambda pid, r: monitor._pid_alive(pid))
+  calls = []
+
+  class Done:
+    returncode = 0
+
+  monkeypatch.setattr(monitor.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or Done())
+  clock = {"t": 1000.0}
+  monkeypatch.setattr(monitor.time, "time", lambda: clock["t"])
+  w = monitor.Worker(runs, monitor.TBCache(), videos=True, evals=True, eval_episodes=1, publish_every=360)
+  w._tick()
+  assert len(calls) == 1 and calls[0][-2:] == ["--every-min", "6"]
+  clock["t"] += 400
+  w._tick()
+  assert len(calls) == 1          # 步數沒變 → 不推
+  st = json.loads((run / "status.json").read_text())
+  st["step"] += 500
+  (run / "status.json").write_text(json.dumps(st))
+  w._tick()
+  assert len(calls) == 2          # 步數變了 → 推
+
+
+def test_export_static_includes_system_and_sync_interval(tmp_path):
+  runs = tmp_path / "runs"
+  _fake_run(runs, "20260101-000000-a", state="done", pid=None)
+  monitor.export_static(runs, tmp_path / "site", every_min=6)
+  d = json.loads((tmp_path / "site" / "api" / "runs.json").read_text(encoding="utf-8"))
+  assert d["every_min"] == 6 and "cpu" in d["system"] and "gpus" in d["system"]

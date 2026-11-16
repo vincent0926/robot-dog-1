@@ -443,8 +443,10 @@ class Worker(threading.Thread):
     for run in list_runs(self.root):
       prog = _read_json(run / "videos" / "progress.json") or {}
       ev = _read_json(run / "eval.json") or {}
+      state = run_state(run)["state"]
+      live = (_read_json(run / "status.json") or {}).get("step") if state in ("running", "starting") else None
       sig.append((run.parent.name, run.name, tuple(_checkpoint_steps(run)), len(prog.get("clips", [])),
-                  ev.get("step"), run_state(run)["state"]))
+                  ev.get("step"), state, live))
     return tuple(sig)
 
   def _maybe_publish(self) -> None:
@@ -460,7 +462,8 @@ class Worker(threading.Thread):
     self.publish["last_try"] = now
     self.current = {"run": "GitHub Pages", "kind": "publish", "since": now}
     log = self.root / "publish.log"
-    cmd = [sys.executable, "-m", "robodog.publish", "--runs", str(self.root), "--message", "自動更新訓練監看快照"]
+    cmd = [sys.executable, "-m", "robodog.publish", "--runs", str(self.root), "--message", "自動更新訓練監看快照",
+           "--every-min", f"{self.publish_every / 60:g}"]
     try:
       with open(log, "a", encoding="utf-8") as f:
         f.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} {' '.join(cmd)}\n")
@@ -608,7 +611,7 @@ def _write_json(path: Path, obj) -> None:
   path.write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
 
 
-def export_static(root: Path, out: Path, keep: int = 30) -> list[str]:
+def export_static(root: Path, out: Path, keep: int = 30, every_min: float | None = None) -> list[str]:
   """把 runs/ 匯出成可以放到 GitHub Pages 的靜態網站（沒有後端，只有 json 和影片）。
 
   - out 裡已經有的訓練會保留（所以能從不同電腦分次匯出，例如雲端和你的 5060 電腦各匯一次）；
@@ -655,7 +658,13 @@ def export_static(root: Path, out: Path, keep: int = 30) -> list[str]:
     d = _read_json(out / "api" / "run" / task / f"{name}.json")
     if d and d.get("summary"):
       summaries.append(d["summary"])
-  _write_json(out / "api" / "runs.json", {"runs": summaries, "errors": [], "root": "", "now": now, "job": None})
+  # 電腦狀態（顯示卡、CPU…）也一起放上去，網頁上方的「即時狀態」才有東西看。CPU 使用率要兩次取樣才準
+  stats = SystemStats(root)
+  stats._cpu()
+  time.sleep(0.5)
+  system = stats.get()
+  _write_json(out / "api" / "runs.json", {"runs": summaries, "errors": [], "root": "", "now": now, "job": None,
+                                          "system": system, "every_min": every_min})
 
   # 網頁本身：在最前面加上「靜態模式」標記，並把網址改成相對路徑（GitHub Pages 會放在 /robot-dog-1/ 底下）
   html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
@@ -692,8 +701,8 @@ def main(argv=None) -> None:
   p.add_argument("--keep", type=int, default=30, help="--export 時最多保留幾個訓練")
   p.add_argument("--publish", action="store_true",
                  help="有新影片或評估時，自動發佈到 GitHub Pages（等同自動執行 python -m robodog.publish）")
-  p.add_argument("--publish-every", type=float, default=10, metavar="分鐘",
-                 help="--publish 時兩次發佈之間至少隔幾分鐘（預設 10）")
+  p.add_argument("--publish-every", type=float, default=6, metavar="分鐘",
+                 help="--publish 時兩次發佈之間至少隔幾分鐘（預設 6；GitHub Pages 每小時大約只重建 10 次，不要再低）")
   args = p.parse_args(argv)
 
   if args.export:
