@@ -39,9 +39,9 @@ run() {
   return 1
 }
 
-if pgrep -f "robodog.train" > /dev/null; then
+if pgrep -f "python[^ ]* -m robodog[.]train" > /dev/null; then
   log "有訓練正在跑，等它結束再開始…"
-  while pgrep -f "robodog.train" > /dev/null; do sleep 30; done
+  while pgrep -f "python[^ ]* -m robodog[.]train" > /dev/null; do sleep 30; done
   log "前一個訓練結束了"
 fi
 

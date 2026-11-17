@@ -44,6 +44,13 @@ BASE_H = 0.65          # 所有區塊邊緣的高度（要夠高，讓最低的�
 PLATFORM = 0.75        # 中央平台的半邊長（1.5m 見方）
 STEPS = 4              # 平台外圍的階數（加上平台往外跨的那一階，一共 5 階）
 
+# 地形掃描（height_scan）：機身周圍的網格點，在「機身朝向」的座標系裡（x 往前、y 往左），單位公尺。
+# 前方看得比較遠（1 m），後面 0.6 m，左右各 0.3 m，共 17 x 5 = 85 個點。
+SCAN_X = np.round(np.arange(-0.6, 1.0001, 0.1), 3)
+SCAN_Y = np.array([-0.3, -0.15, 0.0, 0.15, 0.3])
+N_SCAN = SCAN_X.size * SCAN_Y.size
+SCAN_NOMINAL = 0.3     # 站在平地上時，機身大約高出地面多少（掃描值會減掉它，平地 ≈ 0）
+
 # MuJoCo 的 hfield 資料：data[row * ncol + col]，row 對應 y 還是 x？（用 tests 裡的射線測試確認）
 ROW_IS_Y = True
 
@@ -73,6 +80,9 @@ def default_config() -> config_dict.ConfigDict:
       # 難度上限仍是 max_level；一開始每個環境的難度在 0 ~ curriculum_start 之間隨機。
       curriculum=False,
       curriculum_start=2,
+      # 地形掃描：觀測多加機身周圍 85 個點的地面高度（讓狗「看得到」台階）。觀測大小會改變，
+      # 舊的盲走策略要先用 python -m robodog.expand_ckpt 擴充才能接著練。
+      height_scan=False,
       curriculum_up=2.0,        # 半個區塊（區塊 4m，中央平台到邊緣約 2m）
       curriculum_down=0.5,
       curriculum_min_cmd=1.0,
@@ -201,6 +211,9 @@ class TerrainJoystick(go1_joystick.Joystick):
     with np.errstate(divide="ignore"):
       self._type_logits = jp.asarray(np.log(w / w.sum()), dtype=jp.float32)  # 比例 0 → log 0 = -inf，永遠抽不到
     t = config.terrain
+    self._scan = bool(t.height_scan)
+    gx, gy = np.meshgrid(SCAN_X, SCAN_Y, indexing="ij")
+    self._scan_pts = jp.asarray(np.stack([gx.ravel(), gy.ravel()], -1), dtype=jp.float32)   # [N_SCAN, 2]
     self._curriculum = bool(t.curriculum)
     self._cur_start = min(int(t.curriculum_start), self._max_level)
     self._cur_up, self._cur_down, self._cur_min_cmd = float(t.curriculum_up), float(t.curriculum_down), float(t.curriculum_min_cmd)
@@ -285,6 +298,34 @@ class TerrainJoystick(go1_joystick.Joystick):
     metrics = dict(nstate.metrics)
     metrics["terrain/level"] = self._level_metric(level)
     return nstate.replace(info=info, metrics=metrics)
+
+  # ---- 地形掃描 ----
+
+  def height_scan_at(self, base_xyz: jax.Array, yaw: jax.Array) -> jax.Array:
+    """機身在 base_xyz、朝向 yaw 時，周圍 N_SCAN 個點「機身高度 - 地面高度 - SCAN_NOMINAL」，限制在 ±1 m。
+
+    平地上 ≈ 0；前面是上樓梯 → 變成負的（地面比較高）；下樓梯 → 正的。
+    """
+    c, s = jp.cos(yaw), jp.sin(yaw)
+    px, py = self._scan_pts[:, 0], self._scan_pts[:, 1]
+    world = jp.stack([base_xyz[0] + c * px - s * py, base_xyz[1] + s * px + c * py], axis=-1)
+    return jp.clip(base_xyz[2] - self._ground(world) - SCAN_NOMINAL, -1.0, 1.0)
+
+  def _get_obs(self, data: mjx.Data, info: dict) -> dict:
+    obs = super()._get_obs(data, info)
+    if not self._scan:
+      return obs
+    q = data.qpos[3:7]
+    yaw = jp.arctan2(2 * (q[0] * q[3] + q[1] * q[2]), 1 - 2 * (q[2] ** 2 + q[3] ** 2))
+    scan = self.height_scan_at(data.qpos[:3], yaw)
+    info["rng"], k = jax.random.split(info["rng"])
+    nz = self._config.noise_config.level * 0.02   # 和其他感測器一樣加一點雜訊（約 ±2 cm）
+    scan = scan + (2 * jax.random.uniform(k, scan.shape) - 1) * nz
+    s = obs["state"]
+    # 插在最後 3 格（速度指令）前面：播放、錄影時會直接改 state 的最後 3 格當指令，位置不能變
+    state = jp.concatenate([s[:-3], scan, s[-3:]])
+    priv = jp.concatenate([state, obs["privileged_state"][s.shape[0]:]])   # privileged_state 開頭就是 state
+    return {"state": state, "privileged_state": priv}
 
   # ---- 獎勵：離地高度要扣掉地面高度 ----
 

@@ -170,3 +170,73 @@ def test_curriculum_off_by_default_keeps_spawn():
   for _ in range(8):
     s = step(s, jp.zeros((8, e.action_size)))
   assert np.array_equal(_tiles(e, np.asarray(s.data.qpos[:, :2])), before)
+
+
+# ---------- 地形掃描（height_scan）與擴充舊策略 ----------
+
+def test_height_scan_obs_layout_and_values():
+  # 雜訊關掉：加了掃描之後亂數的取用順序不同，有雜訊就沒辦法逐格比較
+  blind = envs.make_env("terrain", {"impl": "jax", "noise_config": {"level": 0.0}, "terrain": {"max_level": 0}})
+  seen = envs.make_env("terrain", {"impl": "jax", "noise_config": {"level": 0.0}, "terrain": {"max_level": 0, "height_scan": True}})
+  k = jax.random.PRNGKey(0)
+  a = jax.jit(blind.unwrapped.reset_at, static_argnums=(1, 2))(k, 0, 0)
+  b = jax.jit(seen.unwrapped.reset_at, static_argnums=(1, 2))(k, 0, 0)
+  sa, sb = np.asarray(a.obs["state"]), np.asarray(b.obs["state"])
+  assert sb.shape[0] == sa.shape[0] + T.N_SCAN
+  np.testing.assert_allclose(sb[:-3 - T.N_SCAN], sa[:-3], atol=1e-6)   # 原本的輸入位置不變
+  np.testing.assert_allclose(sb[-3:], sa[-3:], atol=1e-6)               # 速度指令還在最後 3 格
+  pa, pb = np.asarray(a.obs["privileged_state"]), np.asarray(b.obs["privileged_state"])
+  np.testing.assert_allclose(pb[:sb.shape[0]], sb, atol=1e-6)
+  np.testing.assert_allclose(pb[sb.shape[0]:], pa[sa.shape[0]:], atol=1e-6)
+  # 平地中央：掃描值 ≈ 0（機身高度 ≈ 地面 + SCAN_NOMINAL）
+  assert np.all(np.abs(sb[-3 - T.N_SCAN:-3]) < 0.08)
+
+  # 上樓梯（難度 5）平台中央、面向 +x：前方 1 m 的點落在第一階上 → 地面比較高 → 掃描值是負的
+  e = seen.unwrapped
+  lv, ty = 5, T.TYPES.index("stairs_up")
+  c = e._centers_np[lv, ty]
+  scan = np.asarray(e.height_scan_at(jp.asarray([c[0], c[1], c[2] + T.SCAN_NOMINAL]), jp.asarray(0.0)))
+  grid = scan.reshape(T.SCAN_X.size, T.SCAN_Y.size)
+  front, here = grid[-1, 2], grid[list(T.SCAN_X).index(0.0), 2]
+  assert abs(here) < 0.01 and front < -0.05
+
+
+def test_expand_checkpoint_keeps_actions_identical(tmp_path):
+  import functools
+  from brax.training import checkpoint as brax_ckpt
+  from brax.training.acme import running_statistics
+  from brax.training.agents.ppo import networks as ppo_networks
+  from robodog import expand_ckpt
+  from robodog.policy_io import _CKPT_CONFIG, load_inference_fn
+
+  blind = envs.make_env("terrain", {"impl": "jax", "noise_config": {"level": 0.0}, "terrain": {"max_level": 0}}).unwrapped
+  seen = envs.make_env("terrain", {"impl": "jax", "noise_config": {"level": 0.0}, "terrain": {"max_level": 0, "height_scan": True}}).unwrapped
+  sizes = {"state": (48,), "privileged_state": (123,)}
+  factory = functools.partial(ppo_networks.make_ppo_networks, policy_hidden_layer_sizes=(32, 32),
+                              value_hidden_layer_sizes=(32, 32), policy_obs_key="state", value_obs_key="privileged_state")
+  net = factory(sizes, 12, preprocess_observations_fn=running_statistics.normalize)
+  key = jax.random.PRNGKey(3)
+  pol = net.policy_network.init(key)
+  val = net.value_network.init(key)
+  spec = {k: jax.ShapeDtypeStruct(v, jp.float32) for k, v in sizes.items()}
+  norm = running_statistics.init_state(spec)
+  batch = {k: jax.random.normal(key, (64,) + v) * 2 + 1 for k, v in sizes.items()}
+  norm = running_statistics.update(norm, batch)       # 有非 0 的平均和標準差，才測得出正規化有沒有對齊
+  # 和訓練時存的格式一樣：{"state": {"shape": (48,), "dtype": float32}, ...}
+  cfg = brax_ckpt.network_config({k: {"shape": v, "dtype": jp.float32} for k, v in sizes.items()}, 12, True, factory)
+  brax_ckpt.save(tmp_path / "blind" / "checkpoints", 1000, (norm, pol, val), cfg, config_fname=_CKPT_CONFIG)
+  src = tmp_path / "blind" / "checkpoints" / f"{1000:012d}"
+
+  mean, std = expand_ckpt.scan_stats(seen, n=512)
+  assert mean.shape == (T.N_SCAN,) and np.all(std >= 0.02)
+  dst = expand_ckpt.expand_checkpoint(src, tmp_path / "seen", T.N_SCAN, mean, std)
+  with pytest.raises(ValueError):                      # 擴充過的不能再擴充一次
+    expand_ckpt.expand_checkpoint(dst, tmp_path / "again", T.N_SCAN, mean, std)
+
+  f_blind, f_seen = load_inference_fn(src), load_inference_fn(dst)
+  for i, (lv, ty) in enumerate([(0, 0), (3, 3), (5, 4), (7, 5)]):
+    k = jax.random.PRNGKey(10 + i)
+    a, b = blind.reset_at(k, lv, ty), seen.reset_at(k, lv, ty)
+    act_a, _ = f_blind(a.obs, k)
+    act_b, _ = f_seen(b.obs, k)
+    np.testing.assert_allclose(np.asarray(act_b), np.asarray(act_a), atol=1e-5)   # 擴充後動作完全一樣

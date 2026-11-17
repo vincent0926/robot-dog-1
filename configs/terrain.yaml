@@ -22,6 +22,13 @@
 # 開啟後訓練曲線的 reward 會隨難度上升而下降（題目變難了），請看 TensorBoard 的
 # eval/episode_terrain/level（平均難度）和訓練完的 evaluate 結果。
 #
+# 地形掃描（讓狗「看得到」腳前方的地形，盲走在上樓梯卡在 75% 左右時用）：
+#   bash scripts/plan_scan.sh   ← 擴充盲走策略 → 掃描 + 自動調難度訓練 → 大評估，一次做完
+# 手動做的話：
+#   python -m robodog.expand_ckpt runs/terrain/<盲走版> --out runs_init/scan
+#   python -m robodog.train configs/terrain.yaml --name scan --resume runs_init/scan \
+#     --set env.terrain.height_scan=true --set env.terrain.curriculum=true --set env.terrain.max_level=7
+#
 # 驗收：python -m robodog.evaluate runs/terrain/latest   （看「最弱的一項」≥ 80%，以及各難度的表格）
 # 基準線（還沒練樓梯的策略放上去）：上樓梯每階 6.2cm 起完全過不去，見 docs 或 README。
 task: terrain
