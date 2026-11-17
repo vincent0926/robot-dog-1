@@ -94,6 +94,9 @@ def main(argv=None) -> None:
   if args.impl:
     env_cfg["impl"] = args.impl
   env = envs.make_env(task, env_cfg)
+  if not cfg.get("solver_warnings", False):
+    from robodog.train import _quiet_solver_warnings
+    _quiet_solver_warnings(env)
   network = brax_ckpt.get_network(_load_network_config(ckpts[-1]), ppo_networks.make_ppo_networks)
   make_policy = ppo_networks.make_inference_fn(network)
 

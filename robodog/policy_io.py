@@ -110,5 +110,8 @@ def load_run(path: str | Path, impl: str | None = None, env_sets: dict | None = 
   if impl:
     env_overrides["impl"] = impl
   env = envs.make_env(cfg["task"], env_overrides)
+  if not cfg.get("solver_warnings", False):
+    from robodog.train import _quiet_solver_warnings
+    _quiet_solver_warnings(env)  # 評估、播放、錄影也不要被「iterations limit reached」洗版（和訓練時一樣）
   policy = load_inference_fn(ckpt)
   return cfg, env, policy, ckpt
