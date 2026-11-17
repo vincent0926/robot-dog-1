@@ -94,6 +94,79 @@ def test_reset_spawns_on_platform_and_respects_max_level():
   assert len({tuple(np.round(p, 0)) for p in xy}) > 10   # 不是全部擠在同一個區塊
 
 
+def _spawn_types(e, n=256):
+  s = jax.jit(jax.vmap(e.reset))(jax.random.split(jax.random.PRNGKey(0), n))
+  xy = np.asarray(s.data.qpos[:, :2])
+  centers = np.array([[T.tile_center(lv, ty) for ty in range(T.N_TYPES)] for lv in range(T.N_LEVELS)])
+  return np.array([np.unravel_index(np.abs(centers - p).max(-1).argmin(), centers.shape[:2])[1] for p in xy])
+
+
+def test_type_weights_oversample_and_exclude():
+  stairs_up = T.TYPES.index("stairs_up")
+  # 只給上樓梯 → 全部都在上樓梯出生
+  only = envs.make_env("terrain", {"impl": "jax", "terrain": {"max_level": 5, "type_weights": [0, 0, 0, 1, 0, 0]}})
+  assert set(_spawn_types(only)) == {stairs_up}
+  # 上樓梯 3.5、其他 1 → 約 41%（256 次抽樣，給寬一點的範圍）
+  more = envs.make_env("terrain", {"impl": "jax", "terrain": {"max_level": 5, "type_weights": [1, 1, 1, 3.5, 1, 1]}})
+  frac = float(np.mean(_spawn_types(more) == stairs_up))
+  assert 0.30 < frac < 0.53
+  with pytest.raises(ValueError):
+    envs.make_env("terrain", {"impl": "jax", "terrain": {"type_weights": [1, 1, 1]}})
+
+
 def test_terrain_config_typo_is_rejected():
   with pytest.raises(KeyError):
     envs.make_env("terrain", {"impl": "jax", "terrain": {"max_levl": 3}})
+
+
+def _curriculum_env(**terrain):
+  from mujoco_playground import wrapper
+  e = envs.make_env("terrain", {"impl": "jax", "terrain": {"curriculum": True, "max_level": 3, **terrain}})
+  return e, wrapper.wrap_for_brax_training(e, episode_length=4)
+
+
+def _tiles(e, xy):
+  return np.array([np.asarray(e.unwrapped._tile_of(jp.asarray(p))) for p in xy])
+
+
+def test_curriculum_moves_spawn_to_next_level():
+  # curriculum_up = 0 → 每一回合都「走出區塊」→ 下一回合難度 +1，直到上限 3
+  e, w = _curriculum_env(curriculum_start=0, curriculum_up=0.0)
+  reset, step = jax.jit(w.reset), jax.jit(w.step)
+  s = reset(jax.random.split(jax.random.PRNGKey(0), 8))
+  assert np.all(_tiles(e, np.asarray(s.data.qpos[:, :2]))[:, 0] == 0)   # 從難度 0 出生
+  act = jp.zeros((8, e.action_size))
+  for episode in range(1, 5):
+    for _ in range(4):
+      s = step(s, act)
+    tiles = _tiles(e, np.asarray(s.data.qpos[:, :2]))
+    assert np.all(tiles[:, 0] == min(episode, 3)), (episode, tiles)  # 回合結束後在新難度的平台上出生
+    z = np.asarray(s.data.qpos[:, 2])
+    plat = np.array([e.unwrapped._centers_np[lv, ty, 2] for lv, ty in tiles])
+    assert np.all(np.abs(z - plat - 0.35) < 0.05)                     # 高度也跟著新平台
+
+
+def test_curriculum_moves_down_when_not_following_command():
+  # 指令要求的距離門檻設 0、倍數設很大 → 一定算「跟不上」→ 每回合 -1，直到 0
+  e, w = _curriculum_env(curriculum_start=3, curriculum_up=100.0, curriculum_down=1e6, curriculum_min_cmd=0.0)
+  reset, step = jax.jit(w.reset), jax.jit(w.step)
+  s = reset(jax.random.split(jax.random.PRNGKey(1), 8))
+  start = _tiles(e, np.asarray(s.data.qpos[:, :2]))[:, 0]
+  act = jp.zeros((8, e.action_size))
+  for episode in range(1, 5):
+    for _ in range(4):
+      s = step(s, act)
+    lv = _tiles(e, np.asarray(s.data.qpos[:, :2]))[:, 0]
+    assert np.all(lv == np.maximum(start - episode, 0)), (episode, start, lv)
+
+
+def test_curriculum_off_by_default_keeps_spawn():
+  from mujoco_playground import wrapper
+  e = envs.make_env("terrain", {"impl": "jax", "terrain": {"max_level": 3}})
+  w = wrapper.wrap_for_brax_training(e, episode_length=4)
+  s = jax.jit(w.reset)(jax.random.split(jax.random.PRNGKey(2), 8))
+  before = _tiles(e, np.asarray(s.data.qpos[:, :2]))
+  step = jax.jit(w.step)
+  for _ in range(8):
+    s = step(s, jp.zeros((8, e.action_size)))
+  assert np.array_equal(_tiles(e, np.asarray(s.data.qpos[:, :2])), before)

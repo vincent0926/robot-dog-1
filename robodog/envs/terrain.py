@@ -51,7 +51,10 @@ ROW_IS_Y = True
 def default_config() -> config_dict.ConfigDict:
   cfg = go1_joystick.default_config()
   cfg.naconmax = 8 * 8192   # 和 Playground 的崎嶇地形一樣
-  cfg.njmax = 12 + 48
+  # 約束列數上限（每個環境）。Playground 崎嶇地形用 12 + 48 = 60，但樓梯邊緣一隻腳可能同時碰到
+  # 好幾個高度場面，GPU 上會出現「nefc overflow - please increase njmax beyond 60」，
+  # 超過的接觸會被直接丟掉（腳可能陷進台階）。放大一倍，多用的顯示卡記憶體很少。
+  cfg.njmax = 120
   cfg.episode_length = 1000
   cfg.terrain = config_dict.create(
       max_level=7,          # 最難會抽到的難度（0～7）。分階段訓練時由淺到深
@@ -60,6 +63,19 @@ def default_config() -> config_dict.ConfigDict:
       slope_base_deg=3.0,   # 斜坡第 0 級角度
       slope_gain_deg=2.4,   # 每升一級增加多少度 → 第 7 級 19.8°
       seed=0,
+      # 訓練時每種地形被抽到的相對比例，順序同 TYPES：
+      #   flat, slope_up, slope_down, stairs_up, stairs_down, boxes
+      # 全部一樣 = 等機率。想加練某種地形就調高它，例如上樓梯 3.5 → 約 41%。
+      type_weights=(1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
+      # 自動調難度（課程學習）：每個環境依自己的表現升降難度，只在訓練時有效（評估固定難度）。
+      #   這一回合走出區塊（離區塊中心 > curriculum_up 公尺）→ 下一回合難度 +1
+      #   走的距離不到「指令要求距離」的 curriculum_down 倍（而且指令要求 > curriculum_min_cmd 公尺）→ -1
+      # 難度上限仍是 max_level；一開始每個環境的難度在 0 ~ curriculum_start 之間隨機。
+      curriculum=False,
+      curriculum_start=2,
+      curriculum_up=2.0,        # 半個區塊（區塊 4m，中央平台到邊緣約 2m）
+      curriculum_down=0.5,
+      curriculum_min_cmd=1.0,
   )
   # 在樓梯上，這幾項要放寬，不然會懲罰「爬樓梯本來就會有的動作」：
   s = cfg.reward_config.scales
@@ -178,6 +194,16 @@ class TerrainJoystick(go1_joystick.Joystick):
     self._ground = make_height_fn(self._heights)
     self._centers = jp.asarray(self._centers_np, dtype=jp.float32)
     self._max_level = int(config.terrain.max_level)
+    w = np.asarray(config.terrain.type_weights, dtype=np.float64)
+    if w.shape != (N_TYPES,) or np.any(w < 0) or w.sum() <= 0:
+      raise ValueError(f"terrain.type_weights 要是 {N_TYPES} 個不小於 0 的數字（順序：{', '.join(TYPES)}），收到 {tuple(w)}")
+    self._type_uniform = bool(np.all(w == w[0]))  # 等機率時用原本的抽法（結果和加這個設定之前完全一樣）
+    with np.errstate(divide="ignore"):
+      self._type_logits = jp.asarray(np.log(w / w.sum()), dtype=jp.float32)  # 比例 0 → log 0 = -inf，永遠抽不到
+    t = config.terrain
+    self._curriculum = bool(t.curriculum)
+    self._cur_start = min(int(t.curriculum_start), self._max_level)
+    self._cur_up, self._cur_down, self._cur_min_cmd = float(t.curriculum_up), float(t.curriculum_down), float(t.curriculum_min_cmd)
 
   # ---- 出生 ----
 
@@ -190,12 +216,75 @@ class TerrainJoystick(go1_joystick.Joystick):
     data = mjx.forward(self.mjx_model, state.data.replace(qpos=qpos))
     return state.replace(data=data, obs=self._get_obs(data, state.info))
 
+  def _sample_type(self, key):
+    if self._type_uniform:
+      return jax.random.randint(key, (), 0, N_TYPES)
+    return jax.random.categorical(key, self._type_logits).astype(jp.int32)
+
   def reset(self, rng: jax.Array) -> mjx_env.State:
-    """訓練用：隨機抽一個區塊（難度不超過 terrain.max_level，地形六種等機率）。"""
+    """訓練用：隨機抽一個區塊（難度不超過 terrain.max_level；地形依 terrain.type_weights 的比例）。"""
     rng, k_level, k_type = jax.random.split(rng, 3)
-    level = jax.random.randint(k_level, (), 0, self._max_level + 1)
-    typ = jax.random.randint(k_type, (), 0, N_TYPES)
-    return self.reset_at(rng, level, typ)
+    top = self._cur_start if self._curriculum else self._max_level
+    level = jax.random.randint(k_level, (), 0, top + 1)
+    typ = self._sample_type(k_type)
+    if not self._curriculum:
+      return self.reset_at(rng, level, typ)
+    rng, k_cur = jax.random.split(rng)
+    state = self.reset_at(rng, level, typ)
+    state.info.update({
+        "terrain_level": level, "terrain_type": typ, "next_type": typ,
+        "cmd_dist": jp.zeros(()), "curriculum_rng": k_cur,
+    })
+    state.metrics["terrain/level"] = self._level_metric(level)
+    return state
+
+  # ---- 自動調難度 ----
+  #
+  # Playground 的 BraxAutoResetWrapper（full_reset=False）在回合結束時，會把機器狗放回
+  # info["AutoResetWrapper_first_data"]（第一次出生的狀態）。這裡每一步都依「這回合到目前為止的表現」
+  # 把那份出生狀態平移到下一回合該去的區塊，所以回合一結束就會在新難度的區塊出生。
+  # 只有在包了那個 wrapper（訓練時）才會生效；評估、播放直接呼叫環境，難度不會變。
+
+  _FIRST = "AutoResetWrapper_first_data"
+
+  def _level_metric(self, level):
+    # brax 的評估會把每一步的 metric 加總成「整回合的值」，除以回合長度後，加總結果就是平均難度
+    return level.astype(jp.float32) / self._config.episode_length
+
+  def _tile_of(self, xy):
+    d = jp.sum(jp.square(self._centers[..., :2] - xy), axis=-1)   # [level, type]
+    idx = jp.argmin(d)
+    return (idx // N_TYPES).astype(jp.int32), (idx % N_TYPES).astype(jp.int32)
+
+  def step(self, state: mjx_env.State, action: jax.Array) -> mjx_env.State:
+    nstate = super().step(state, action)
+    if not self._curriculum or self._FIRST not in state.info or "steps" not in state.info:
+      return nstate
+    info = dict(nstate.info)
+    new_ep = state.info["steps"] == 0          # 上一步剛重置過 → 這是新回合的第一步
+    rng, k = jax.random.split(info["curriculum_rng"])
+    # 新回合：從出生位置認出現在在哪個區塊，並先抽好「下一回合」的地形種類
+    lv0, ty0 = self._tile_of(state.data.qpos[:2])
+    level = jp.where(new_ep, lv0, info["terrain_level"])
+    typ = jp.where(new_ep, ty0, info["terrain_type"])
+    next_type = jp.where(new_ep, self._sample_type(k), info["next_type"])
+    cmd_dist = jp.where(new_ep, 0.0, info["cmd_dist"]) + jp.linalg.norm(info["command"][:2]) * self.dt
+
+    # 到目前為止的表現 → 下一回合的難度
+    dist = jp.linalg.norm(nstate.data.qpos[:2] - self._centers[level, typ, :2])
+    up = dist > self._cur_up
+    down = (dist < self._cur_down * cmd_dist) & (cmd_dist > self._cur_min_cmd) & ~up
+    next_level = jp.clip(level + up.astype(jp.int32) - down.astype(jp.int32), 0, self._max_level)
+
+    # 把「回合結束後的出生狀態」平移到下一回合的區塊
+    first = info[self._FIRST]
+    fl, ft = self._tile_of(first.qpos[:2])
+    shift = self._centers[next_level, next_type] - self._centers[fl, ft]
+    info[self._FIRST] = first.replace(qpos=first.qpos.at[:3].add(shift))
+    info.update(terrain_level=level, terrain_type=typ, next_type=next_type, cmd_dist=cmd_dist, curriculum_rng=rng)
+    metrics = dict(nstate.metrics)
+    metrics["terrain/level"] = self._level_metric(level)
+    return nstate.replace(info=info, metrics=metrics)
 
   # ---- 獎勵：離地高度要扣掉地面高度 ----
 

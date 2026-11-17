@@ -4,6 +4,7 @@
   python -m robodog.monitor                 # 開在 http://localhost:8000
   python -m robodog.monitor --port 9000
   python -m robodog.monitor --no-video      # 不自動錄影
+  python -m robodog.monitor --publish       # 有新影片 / 評估時自動發佈到 GitHub Pages
 
 它會：
   - 每 5 秒讀一次 runs/ 底下所有訓練（TensorBoard 紀錄、status.json、checkpoint）
@@ -358,7 +359,8 @@ def _pick_gl() -> str | None:
 class Worker(threading.Thread):
   """一次只做一件事：先補錄影片，再補做評估。全部用 CPU，不影響正在訓練的顯示卡。"""
 
-  def __init__(self, root: Path, tb: TBCache, videos: bool, evals: bool, eval_episodes: int):
+  def __init__(self, root: Path, tb: TBCache, videos: bool, evals: bool, eval_episodes: int,
+               publish_every: float | None = None):
     super().__init__(daemon=True)
     self.root, self.tb = root, tb
     self.videos, self.evals, self.eval_episodes = videos, evals, eval_episodes
@@ -366,6 +368,10 @@ class Worker(threading.Thread):
     self.video_error: str | None = None
     self.gl: str | None = None
     self.failed: dict[tuple[str, str], int] = {}  # 同一件事最多重試 2 次
+    # 自動發佈到 GitHub Pages：None = 關閉；否則是兩次發佈之間至少隔幾秒
+    self.publish_every = publish_every
+    self.publish = {"enabled": publish_every is not None, "last_ok": None, "last_try": None, "error": None}
+    self._published_sig = None
 
   def job_for(self, run: Path):
     cur = self.current
@@ -429,6 +435,52 @@ class Worker(threading.Thread):
           self._run(run, "eval", [sys.executable, "-m", "robodog.evaluate", str(run),
                                   "--impl", "jax", "--episodes", str(self.eval_episodes)])
           return
+    self._maybe_publish()  # 影片和評估都補完了（背景空下來）才發佈，網站上才不會是一半的狀態
+
+  def site_signature(self) -> tuple:
+    """網站內容的「指紋」：有新 checkpoint、新影片、新評估或狀態改變，指紋就會變。"""
+    sig = []
+    for run in list_runs(self.root):
+      prog = _read_json(run / "videos" / "progress.json") or {}
+      ev = _read_json(run / "eval.json") or {}
+      state = run_state(run)["state"]
+      live = (_read_json(run / "status.json") or {}).get("step") if state in ("running", "starting") else None
+      sig.append((run.parent.name, run.name, tuple(_checkpoint_steps(run)), len(prog.get("clips", [])),
+                  ev.get("step"), state, live))
+    return tuple(sig)
+
+  def _maybe_publish(self) -> None:
+    if self.publish_every is None:
+      return
+    now = time.time()
+    last = self.publish["last_try"]
+    if last is not None and now - last < self.publish_every:
+      return  # 不要推得太頻繁（每次都要 clone + push 整個網站）
+    sig = self.site_signature()
+    if not sig or sig == self._published_sig:
+      return
+    self.publish["last_try"] = now
+    self.current = {"run": "GitHub Pages", "kind": "publish", "since": now}
+    log = self.root / "publish.log"
+    cmd = [sys.executable, "-m", "robodog.publish", "--runs", str(self.root), "--message", "自動更新訓練監看快照",
+           "--every-min", f"{self.publish_every / 60:g}"]
+    try:
+      with open(log, "a", encoding="utf-8") as f:
+        f.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} {' '.join(cmd)}\n")
+        f.flush()
+        rc = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT, cwd=Path.cwd(),
+                            timeout=30 * 60).returncode
+    except subprocess.TimeoutExpired:
+      rc = "timeout"
+    finally:
+      self.current = None
+    if rc == 0:
+      self._published_sig = sig
+      self.publish.update(last_ok=time.time(), error=None)
+      print(f"[monitor] 已自動發佈到 GitHub Pages（{time.strftime('%H:%M')}）", flush=True)
+    else:
+      self.publish["error"] = f"發佈失敗（{rc}），{int(self.publish_every // 60)} 分鐘後再試。詳細請看 {log}"
+      print(f"[monitor] {self.publish['error']}", flush=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -487,6 +539,7 @@ def make_handler(root: Path, tb: TBCache, worker: "Worker | None", system: Syste
           return self._json({
               "runs": runs, "errors": errors, "root": str(root), "now": time.time(),
               "job": {"run": Path(job["run"]).name, "kind": job["kind"]} if job else None,
+              "publish": worker.publish if worker else None,
           })
         if path == "/api/run":
           q = parse_qs(url.query)
@@ -558,7 +611,7 @@ def _write_json(path: Path, obj) -> None:
   path.write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
 
 
-def export_static(root: Path, out: Path, keep: int = 30) -> list[str]:
+def export_static(root: Path, out: Path, keep: int = 30, every_min: float | None = None) -> list[str]:
   """把 runs/ 匯出成可以放到 GitHub Pages 的靜態網站（沒有後端，只有 json 和影片）。
 
   - out 裡已經有的訓練會保留（所以能從不同電腦分次匯出，例如雲端和你的 5060 電腦各匯一次）；
@@ -605,7 +658,13 @@ def export_static(root: Path, out: Path, keep: int = 30) -> list[str]:
     d = _read_json(out / "api" / "run" / task / f"{name}.json")
     if d and d.get("summary"):
       summaries.append(d["summary"])
-  _write_json(out / "api" / "runs.json", {"runs": summaries, "errors": [], "root": "", "now": now, "job": None})
+  # 電腦狀態（顯示卡、CPU…）也一起放上去，網頁上方的「即時狀態」才有東西看。CPU 使用率要兩次取樣才準
+  stats = SystemStats(root)
+  stats._cpu()
+  time.sleep(0.5)
+  system = stats.get()
+  _write_json(out / "api" / "runs.json", {"runs": summaries, "errors": [], "root": "", "now": now, "job": None,
+                                          "system": system, "every_min": every_min})
 
   # 網頁本身：在最前面加上「靜態模式」標記，並把網址改成相對路徑（GitHub Pages 會放在 /robot-dog-1/ 底下）
   html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
@@ -640,6 +699,10 @@ def main(argv=None) -> None:
   p.add_argument("--eval-episodes", type=int, default=128)
   p.add_argument("--export", metavar="資料夾", default=None, help="不開網站，改成匯出靜態網站到這個資料夾（要發佈到 GitHub 請用 python -m robodog.publish）")
   p.add_argument("--keep", type=int, default=30, help="--export 時最多保留幾個訓練")
+  p.add_argument("--publish", action="store_true",
+                 help="有新影片或評估時，自動發佈到 GitHub Pages（等同自動執行 python -m robodog.publish）")
+  p.add_argument("--publish-every", type=float, default=6, metavar="分鐘",
+                 help="--publish 時兩次發佈之間至少隔幾分鐘（預設 6；GitHub Pages 每小時大約只重建 10 次，不要再低）")
   args = p.parse_args(argv)
 
   if args.export:
@@ -651,7 +714,8 @@ def main(argv=None) -> None:
   root.mkdir(parents=True, exist_ok=True)
   tb = TBCache()
   worker = Worker(root, tb, videos=not args.no_video, evals=not args.no_eval,
-                  eval_episodes=args.eval_episodes)
+                  eval_episodes=args.eval_episodes,
+                  publish_every=args.publish_every * 60 if args.publish else None)
   worker.start()
 
   server = ThreadingHTTPServer((args.host, args.port), make_handler(root, tb, worker))
@@ -660,6 +724,8 @@ def main(argv=None) -> None:
   ip = _lan_ip()
   if args.host == "0.0.0.0" and ip:
     print(f"[monitor] 區網：http://{ip}:{args.port}  （手機連同一個 Wi-Fi 打開這個）")
+  if args.publish:
+    print(f"[monitor] 自動發佈到 GitHub Pages：開啟（最多每 {args.publish_every:g} 分鐘一次，紀錄在 {root / 'publish.log'}）")
   print("[monitor] 按 Ctrl+C 結束", flush=True)
   try:
     server.serve_forever()

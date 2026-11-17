@@ -38,7 +38,8 @@ def pages_url(remote: str) -> str | None:
   return f"https://{m.group(1)}.github.io/{m.group(2)}/" if m else None
 
 
-def publish(runs: Path, keep: int = 30, branch: str = "gh-pages", message: str | None = None, dry_run: bool = False) -> str | None:
+def publish(runs: Path, keep: int = 30, branch: str = "gh-pages", message: str | None = None, dry_run: bool = False,
+            every_min: float | None = None) -> str | None:
   remote = _git("config", "--get", "remote.origin.url").stdout.strip()
   if not remote:
     raise RuntimeError("找不到 git remote origin。請在專案資料夾裡執行。")
@@ -54,7 +55,7 @@ def publish(runs: Path, keep: int = 30, branch: str = "gh-pages", message: str |
       print(f"[publish] 遠端還沒有 {branch} 分支，從頭建立")
       site.mkdir(parents=True)
       _git("init", "-q", cwd=site)
-    wrote = export_static(runs, site, keep=keep)
+    wrote = export_static(runs, site, keep=keep, every_min=every_min)
     print(f"[publish] 這台電腦匯出 {len(wrote)} 個訓練")
     for w in wrote[:8]:
       print(f"          {w}")
@@ -84,9 +85,10 @@ def main(argv=None) -> None:
   p.add_argument("--branch", default="gh-pages")
   p.add_argument("--message", default=None, help="commit 訊息")
   p.add_argument("--dry-run", action="store_true", help="只匯出和檢查，不推送")
+  p.add_argument("--every-min", type=float, default=None, help="（monitor --publish 自動帶入）網站多久同步一次，顯示在網頁上")
   args = p.parse_args(argv)
   try:
-    publish(Path(args.runs), args.keep, args.branch, args.message, args.dry_run)
+    publish(Path(args.runs), args.keep, args.branch, args.message, args.dry_run, every_min=args.every_min)
   except RuntimeError as e:
     print(f"[publish] {e}", file=sys.stderr)
     raise SystemExit(1)

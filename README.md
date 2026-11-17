@@ -201,6 +201,20 @@ python -m robodog.publish
 - 推送需要你的 GitHub 登入權限。如果跳出要密碼，GitHub 已經不收密碼了，請改用 `gh auth login` 或 Personal Access Token。
 - 想先檢查內容、不推送：`python -m robodog.publish --dry-run`。
 
+#### 自動發佈（建議）
+
+手動執行 `publish` 只會上傳「那一刻」的狀態：如果監看網站還在背景錄影，還沒錄好的影片就不會出現在固定網址上。啟動監看網站時加上 `--publish`，它就會自己幫你發佈：
+
+```bash
+python -m robodog.monitor --publish
+```
+
+- 等背景的錄影、評估**都做完**才發佈，網站上不會出現只錄了一半的狀態。
+- 只有內容有變（訓練進度、新的 checkpoint、新影片、新評估、訓練狀態改變）才發佈；兩次發佈之間至少隔 6 分鐘（`--publish-every 30` 可以改成 30 分鐘）。GitHub Pages 每小時大約只重建 10 次，不要設得比 6 分鐘更短。
+- 訓練中也會定期同步：雲端版網頁上方一樣有「即時狀態」（訓練進度、顯示卡和 CPU 狀態），進度條會依最後回報的速度推估，網頁每分鐘自動檢查新資料。
+- 監看網站最下面一行會顯示「上次自動發佈 …分鐘前」；失敗時會顯示原因，稍後自動再試。詳細紀錄在 `runs/publish.log`。
+- 一樣需要這台電腦能 `git push`（見上面的登入說明）。
+
 ### 看訓練曲線（TensorBoard）
 
 另開一個 Ubuntu 視窗：
