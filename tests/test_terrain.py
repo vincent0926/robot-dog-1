@@ -1,5 +1,7 @@
 """樓梯與斜坡地形：地形產生器、和 MuJoCo 的對應、出生位置。"""
 
+from pathlib import Path
+
 import jax
 import jax.numpy as jp
 import mujoco
@@ -229,7 +231,13 @@ def test_expand_checkpoint_keeps_actions_identical(tmp_path):
 
   mean, std = expand_ckpt.scan_stats(seen, n=512)
   assert mean.shape == (T.N_SCAN,) and np.all(std >= 0.02)
-  dst = expand_ckpt.expand_checkpoint(src, tmp_path / "seen", T.N_SCAN, mean, std)
+  import os
+  cwd = os.getcwd()
+  os.chdir(tmp_path)
+  try:   # 和排程腳本一樣給相對路徑（orbax 只收絕對路徑，曾經在這裡失敗）
+    dst = expand_ckpt.expand_checkpoint(src, Path("seen"), T.N_SCAN, mean, std)
+  finally:
+    os.chdir(cwd)
   with pytest.raises(ValueError):                      # 擴充過的不能再擴充一次
     expand_ckpt.expand_checkpoint(dst, tmp_path / "again", T.N_SCAN, mean, std)
 

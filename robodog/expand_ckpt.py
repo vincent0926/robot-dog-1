@@ -90,6 +90,7 @@ def expand_checkpoint(src: Path, out: Path, k: int, mean: np.ndarray, std: np.nd
   if dim != STATE_DIM_BLIND:
     raise ValueError(f"這個 checkpoint 的 state 長度是 {dim}，不是盲走版的 {STATE_DIM_BLIND}（可能已經擴充過了）。")
   params = expand_params(brax_ckpt.load(src), k, mean, std)
+  out = Path(out).resolve()   # orbax 只接受絕對路徑（給 runs_init/… 這種相對路徑會報錯）
   dst = out / "checkpoints" / src.name
   if dst.exists():
     shutil.rmtree(dst)
